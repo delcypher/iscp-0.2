@@ -1,0 +1,252 @@
+#!/bin/bash 
+# iscp - interactive secure copy by Dan Liew
+# version 0 (so buggy it can't even make alpha)
+
+#set IFS to newline character so we can use spaces in filenames
+#WARNING DO NOT RUN THIS SCRIPT THROUGH . OR source AS IT WILL SCREW UP THE IFS
+IFS=$'\n'
+
+#declare default variables
+declare -x ISCP_USERNAME
+declare -x ISCP_HOSTNAME=""
+declare -ix ISCP_PORT=22
+declare -x ISCP_TARGETDIR=${PWD}/
+declare -x ISCP_SOURCEDIR  #DO NOT CHANGE THIS. THE DEFAULT VALUE IS SET ELSEWHERE IN THE SCRIPT
+
+#declare global file list variable
+declare -x ISCP_FILE_LIST
+
+#declare variable containing users choice 
+declare -x ISCP_CHOICE
+
+#declare variable containing number of found items from remote ls command
+declare -x ISCP_NO_OF_ITEMS
+
+#declare variable that will be blank if file and DIRNAME/ if download is directory
+declare -x ISCP_DOWNLOAD_TYPE
+
+#declare variable that will contain users choice for download method (resume or fresh download)
+declare -x ISCP_DL_CHOICE
+
+#function declarations
+
+function usage() {
+echo "Usage: iscp -u USERNAME [-h HOSTNAME] [-p PORT] [-s SOURCEDIR] [-t TARGETDIR]
+
+Defaults:
+HOSTNAME: $ISCP_HOSTNAME
+PORT: $ISCP_PORT
+SOURCEDIR: $ISCP_SOURCEDIR
+TARGETDIR: $ISCP_TARGETDIR
+
+DESCRIPTION:
+iscp is a bash shell script written to make a more interactive version of scp that also supports resume (via rsync).  -u is the only mandatory option; HOSTNAME, PORT, SOURCEDIR & TARGETDIR are set in the script itself which can easily be changed. iscp will automatically ask you if you want to resume a file or directory transfer if it detects already existing files/directory in TARGETDIR.
+
+-u USERNAME	- The username used on the remote system you are connecting to via ssh
+-h HOSTNAME	- The hostname/IP address of the remote system you are connecting to via ssh
+-p PORT		- The port number used to connect to the remote system
+-s SOURCEDIR	- The directory on the remote system to list
+-t TARGETDIR	- The directory on the local system to transfer files to.
+
+AUTHOR:
+By Dan Liew
+
+" 1>&2
+exit 1
+}
+
+function ask() {
+#loop through files/directories - pipe through more
+( i=1; for fod in $ISCP_FILE_LIST ; do echo "[${i}] $fod"; i=$((i +1)); done ) | more
+
+#ask user to choose file
+echo -n "Download file/directory number (q - quit)?"
+read ISCP_CHOICE
+
+#if input is q then quit
+if [ $ISCP_CHOICE == "q" ]; then
+echo "quitting..." 1>&2
+exit 0
+fi
+
+#if user enters wrong number ask again
+if [ $ISCP_CHOICE -gt $ISCP_NO_OF_ITEMS -o $ISCP_CHOICE -lt 1 ]; then
+echo "Error: Choice out of range" 1>&2
+ask
+fi
+
+}
+
+function dlmethod() {
+echo -n "File/Directory $fod already exists on local system! (d)Fresh Download/(r)Resume/(q)Quit?"
+read ISCP_DL_CHOICE
+
+if [ $ISCP_DL_CHOICE == "q" ]; then exit 0; fi
+if [ $ISCP_DL_CHOICE != "d" -a $ISCP_DL_CHOICE != "r" ]; then
+echo "Invalid choice!" 1>&2
+dlmethod
+fi
+}
+
+# This function defines the command that iscp should run to do a fresh file transfer
+function freshfile() {
+echo "Fresh download of file ${fod}..."
+scp -P $ISCP_PORT "${ISCP_USERNAME}@${ISCP_HOSTNAME}:${ISCP_SOURCEDIR}${fod}" "${ISCP_TARGETDIR}${fod}"
+}
+
+# This function defines the command that iscp should run to do a fresh directory transfer
+function freshdir() {
+echo "Fresh download of directory ${fod}..."
+scp -r -P $ISCP_PORT "${ISCP_USERNAME}@${ISCP_HOSTNAME}:${ISCP_SOURCEDIR}${fod}" "${ISCP_TARGETDIR}"
+
+}
+
+#This function defines the command iscp should run to resume a file transfer
+function resumefile() {
+echo "Resume file ${fod}...warning this might not work!"
+rsync --rsh=ssh --port $ISCP_PORT --progress --partial "${ISCP_USERNAME}@${ISCP_HOSTNAME}:${ISCP_SOURCEDIR}${fod}" "${ISCP_TARGETDIR}${fod}"
+}
+
+function resumedir() {
+echo "Resume directory ${fod}...warning this might not work!"
+rsync --rsh=ssh --port $ISCP_PORT --progress --partial --recursive "${ISCP_USERNAME}@${ISCP_HOSTNAME}:${ISCP_SOURCEDIR}${fod}" "${ISCP_TARGETDIR}"
+
+}
+
+#end function declarations
+
+#check if no arguments are present
+if [ $# -eq 0 ]; then
+echo "Error: No arguments specified" 1>&2
+usage
+fi
+
+
+#parse arguments
+
+for ((i=1; i<=$#; i++))
+do
+#cycle through each argument setting variables if parameter is correct
+
+if [ ${!i} == "-u" ]; then
+#found -u (user) switch set ISCP_USERNAME
+i=$((i + 1))
+ISCP_USERNAME=${!i}
+fi
+
+if [ ${!i} == "-h" ]; then
+#found -h (hostname) switch set ISCP_HOSTNAME
+i=$((i + 1))
+ISCP_HOSTNAME=${!i}
+fi
+
+if [ ${!i} == "-p" ]; then
+#found -p  (post) switch set ISCP_PORT
+i=$((i + 1))
+ISCP_PORT=${!i}
+fi
+
+if [ ${!i} == "-s" ]; then
+#found -s (source directory) switch set ISCP_SOURCEDIR
+i=$((i + 1))
+ISCP_SOURCEDIR=${!i}
+#if user did not end directory with slash then we must add one
+if [ -z $(echo "$ISCP_SOURCEDIR" | grep "/$" ) ]; then ISCP_SOURCEDIR=${ISCP_SOURCEDIR}/ ; fi
+
+fi
+
+if [ ${!i} == "-t" ]; then
+#found -t (target directory) switch set ISCP_TARGETDIR
+i=$((i + 1))
+ISCP_TARGETDIR=${!i}
+#if user did not end directory with slash then we must add one
+if [ -z $(echo "$ISCP_TARGETDIR" | grep "/$" ) ]; then ISCP_TARGETDIR=${ISCP_TARGETDIR}/ ; fi
+
+fi
+
+done
+
+#if user was not set complain
+if [ -z $ISCP_USERNAME ]; then
+echo "Error: Username not specified by -u option" 1>&2
+usage
+fi
+
+#check if target directory exist
+if [ ! -d $ISCP_TARGETDIR ]; then
+echo "Error: Target directory does not exist or is inaccessible." 1>&2
+exit 1;
+fi
+
+#declare source directory if was not set by user
+if [ -z $ISCP_SOURCEDIR ]; then
+ISCP_SOURCEDIR="/secure/downloads/${ISCP_USERNAME}/"
+fi
+
+#GET REMOTE DIRECTORY LISTING
+echo "Connecting to...${ISCP_USERNAME}@${ISCP_HOSTNAME}:${ISCP_SOURCEDIR} on port $ISCP_PORT"
+ISCP_FILE_LIST=`ssh -p $ISCP_PORT ${ISCP_USERNAME}@${ISCP_HOSTNAME} ls -F ${ISCP_SOURCEDIR}`
+
+#Get no. of items found
+ISCP_NO_OF_ITEMS=$( echo "$ISCP_FILE_LIST" | wc -l )
+
+#check that we found at least 1 file, if not there isn't anything to download
+if [ -z "$ISCP_FILE_LIST"  ]; then echo "Error: Nothing to download!" 1>&2; exit 1 ; fi
+
+#present user with list and ask for input
+ask
+
+#we now have the number user chose, loop through list to get file name
+
+i=1
+for fod in $ISCP_FILE_LIST 
+do 
+
+if [ $i -eq $ISCP_CHOICE ]; then
+#start do download
+
+#determine if we are doing a directory or file by seeing if slash appended to end of $fod
+ISCP_DOWNLOAD_TYPE=$( echo "$fod" | grep "/$")
+
+if [ -z $ISCP_DOWNLOAD_TYPE ]; then
+###################START DOWNLOAD INDIVIDUAL FILE 
+echo "Download individual file..."
+#check to see if file already exists in target directory
+if [ -f ${ISCP_TARGETDIR}${fod} ]; then
+#file already exists ask user for method fresh download/resume/quit?
+dlmethod
+
+#based on users decision we will now call the appropriate function
+if [ $ISCP_DL_CHOICE == "d" ]; then freshfile ; fi
+if [ $ISCP_DL_CHOICE == "r" ]; then resumefile ; fi
+
+else
+#file doesn't already exist so we do fresh download
+freshfile
+fi
+
+###################END DOWNLOAD INDIVIDUAL FILE
+else
+###################START DOWNLOAD DIRECTORY
+
+if [ -d ${ISCP_TARGETDIR}${fod} ]; then
+#directory already exists ask user method fresh download/resume/quit?
+dlmethod
+if [ $ISCP_DL_CHOICE == "d" ]; then freshdir; fi
+if [ $ISCP_DL_CHOICE == "r" ]; then resumedir; fi
+
+else
+#directory doesn't already exist so we do fresh download
+freshdir
+fi
+
+###################END DOWNLOAD DIRECTORY
+fi
+
+#end do download
+fi
+
+i=$((i+1))
+done
+
+echo "Done"
