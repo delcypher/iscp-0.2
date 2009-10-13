@@ -22,12 +22,13 @@
 declare -x ISCP_SOURCE=""
 declare -x ISCP_TARGET_DIR=${PWD}/
 declare -ix ISCP_PORT=22
-declare -x ISCP_AUTO=0
+declare -x ISCP_RESUME=0
 declare -xi ISCP_SSH_AGENT=0
 declare -x ISCP_IDENTITY_FILE=""
 declare -xi ISCP_RETRY=0
-declare -xi ISCP_SIZE=0
-declare -x ISCP_VERSION="0.2b"
+declare -x ISCP_VERSION="0.2c"
+declare -x ISCP_BW_LIMIT="" #IF YOU NEED TO SET A DEFAULT MUST BE SET e.g. ="--bwlimit=20"
+declare -x ISCP_QUOTE="" #LEAVE THIS ALONE
 
 #declare other variables
 declare -x ISCP_SOURCE_SERVER
@@ -35,27 +36,31 @@ declare -x ISCP_SOURCE_DIR
 declare -ax ISCP_FILE_ARRAY
 declare -ax ISCP_USER_CHOICE
 declare -ax ISCP_FILE_SIZE_ARRAY
+declare -ix ISCP_TICK=0 #LEAVE THIS ALONE!
 
 #start functions
 function usage() {
-echo "Usage: iscp --help | [--auto] [--port PORT]  [--size] [--ssh-agent [IDENTITY_FILE] ] [--retry] [source_directory target_directory]
+echo "Usage: iscp --help | [--bwlimit KBPS] [--port PORT] [--quote] [--ssh-agent [IDENTITY_FILE] ] [--resume] [--retry] [source_directory target_directory]
 
 DESCRIPTON
-iscp is an interactive version of scp written in BASH using rsync. When iscp is run it will perform an ls command on the remote system and then present the user with a numbered list of files and directories to download (if available). The user then enters a space seperated list of item number(s) the user wishes to download. iscp will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then iscp will ask the user what to do (download/resume/skip/quit) unless the --auto option is set. 
+iscp is an interactive version of scp written in BASH using rsync. When iscp is run it will perform an ls command and a du (--si option) on the remote system and then present the user with a numbered list of files and directories to download (if available). The user then enters a space seperated list of item number(s) the user wishes to download. iscp will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then iscp will ask the user what to do (download/resume/skip/quit) unless the --auto option is set. 
 
 OPTIONS
 
---auto
-If iscp finds an existing file/directory in the target directory then iscp will automatically try to resume the file transfer instead of prompting the user for an action.
+--bwlimit KBPS
+Sets a bandwidth in KB/s when downloading files. No limit is applied to the downloading of the file list.
 
 --port PORT
 This option allows the user to set the port number to use for ssh connections.
 
---size
-This option will cause iscp to issue a du --si command to the source server and retrieve file size information and display it in the interactive list.
+--quote
+This option sends the --protect-args option to rsync and is used to prevent the remote shell interpretting special characters in file/directory names (e.g. white space). Warning if the remote system has an old version of rsync that does not support this option then it will fail!
 
 --ssh-agent [IDENTITY_FILE]
 This option loads ssh-agent and loads the identity file specified. If no identity file is specified then the user's default identites will be loaded. After iscp has finished executing the ssh-agent will be terminated. This option is useful if you have a key setup between your machine and the target machine as you will only need to enter your passphrase once.
+
+--resume
+If iscp finds an existing file/directory in the target directory then iscp will automatically try to resume the file transfer instead of prompting the user for an action.
 
 --retry
 This option will force iscp to keep trying to do a file transfer until it receives an error code of 0. This is useful if your connection is dropped because it will automatically try to resume the file transfer. Job suspend can get you out of this (usually CTRL+Z) then kill %JOB_NUMBER .
@@ -94,13 +99,8 @@ fi
 
 function user-menu() {
 
-#create options array for --size not set
-if [ $ISCP_SIZE -eq 0 ]; then 
-( for ((i=0; i<= ${#ISCP_FILE_ARRAY[*]} -1; i++)); do echo "[${i}] ${ISCP_FILE_ARRAY[i]}"; done; ) | more 
-else
-#create options array for --size set
+#create options array with file/directory sizes
 ( for ((i=0; i<= ${#ISCP_FILE_ARRAY[*]} -1; i++)); do echo "[${i}] (${ISCP_FILE_SIZE_ARRAY[i]}) ${ISCP_FILE_ARRAY[i]}"; done; ) | more
-fi
 
 #temporary makes space IFS
 IFS=$' \t\n'
@@ -176,18 +176,33 @@ echo -e "\nFresh directory download: ${ISCP_FILE_ARRAY[file_no]}"
 
 #if old dir exists then remove it
 if [ -d "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ]; then echo -n "removing existing directory..."; rm -r  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ; echo "starting download..."; fi
+
+if [ -z $ISCP_QUOTE ]; then
 #fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
 ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g')
-rsync --rsh=ssh --port $ISCP_PORT --progress --recursive --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
+else
+ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
+fi
+
+
+if [ ! -z $ISCP_BW_LIMIT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT" | sed 's/--bwlimit=//g')KB/s"; fi
+rsync --rsh="ssh -p $ISCP_PORT" $ISCP_BW_LIMIT $ISCP_QUOTE --port $ISCP_PORT --progress --recursive --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
 # if rsync fails and user specified --retry retry rsync command indefinitely
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "Directory Transfer failure...retrying" 1>&2; fresh-dir; fi
 }
 
 function resume-dir() {
 echo -e "\nResume directory download: ${ISCP_FILE_ARRAY[file_no]}"
+
+if [ -z $ISCP_QUOTE ]; then
 #fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
 ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g')
-rsync --rsh=ssh --port $ISCP_PORT --progress --partial --recursive  "$ISCP_ESC_SOURCE"  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
+else
+ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
+fi
+
+if [ ! -z $ISCP_BW_LIMIT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT" | sed 's/--bwlimit=//g')KB/s"; fi
+rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT $ISCP_QUOTE --port $ISCP_PORT --progress --partial --recursive  "$ISCP_ESC_SOURCE"  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
 # if rsync fails and user specified --retry retry rsync command indefinitely
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "Directory Transfer failure...retrying" 1>&2; resume-dir; fi
 }
@@ -198,18 +213,32 @@ echo -e "\nFresh file download: ${ISCP_FILE_ARRAY[file_no]}"
 #if old file exists then remove it
 if [ -f "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ]; then echo -n "removing existing file..."; rm  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ; echo "starting download..."; fi
 
+if [ -z $ISCP_QUOTE ]; then
 #fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
 ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g')
-rsync --rsh=ssh --port $ISCP_PORT --progress --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
+else
+ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
+fi
+
+if [ ! -z $ISCP_BW_LIMIT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT" | sed 's/--bwlimit=//g')KB/s"; fi
+rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT $ISCP_QUOTE --port $ISCP_PORT --progress --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
 # if rsync fails and user specified --retry retry rsync command indefinitely
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "File Transfer failure...retrying" 1>&2; fresh-file; fi
 }
 
 function resume-file() {
 echo -e "\nResume file download: ${ISCP_FILE_ARRAY[file_no]}"
+
+if [ -z $ISCP_QUOTE ]; then
 #fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
 ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g')
-rsync --rsh=ssh --port $ISCP_PORT --progress --partial  "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
+else
+ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
+fi
+
+
+if [ ! -z $ISCP_BW_LIMIT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT" | sed 's/--bwlimit=//g')KB/s"; fi
+rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT $ISCP_QUOTE --port $ISCP_PORT --progress --partial  "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
 # if rsync fails and user specified --retry retry rsync command indefinitely
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "File Transfer failure...retrying" 1>&2; resume-file; fi
 }
@@ -226,8 +255,8 @@ if [ $(($# - 1)) -eq $i -a $(echo ${!i} | cut -c1,2 ) != "--" -a $(echo ${!#} | 
 #j=$(($# -1))
 #if [ $(echo ${!j} | sed 's/[^-]//g' | wc -m) -ne 3 -a $(echo ${!#} | sed 's/[^-]//g' | wc -m) -ne 3 ]; then ISCP_SOURCE=${!j};  ISCP_TARGET_DIR=${!#}; fi
 
-#check for --auto argument
-if [ ${!i} == "--auto" ]; then ISCP_AUTO=1; fi
+#check for --resume argument
+if [ ${!i} == "--resume" ]; then ISCP_RESUME=1; fi
 
 #check for --help argument
 if [ ${!i} == "--help" ]; then usage; fi 
@@ -235,8 +264,18 @@ if [ ${!i} == "--help" ]; then usage; fi
 #check for --port argument
 if [ ${!i} == "--port" ]; then i=$((i + 1)); 
 if [ -z ${!i} ]; then echo "Error: Port number not specified!" 1>&2 ; usage; fi
+if [ $( echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then echo "Error: Port number is invalid!" 1>&2; usage; fi
 ISCP_PORT=${!i}; 
 fi
+
+#check for --bwlimit argument
+if [ ${!i} == "--bwlimit" ]; then i=$((i +1));
+if [ $( echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then echo "Error: Bandwidth limit is invalid!" 1>&2; usage; fi
+ISCP_BW_LIMIT="--bwlimit=${!i}"
+fi
+
+#check for --quote argument
+if [ ${!i} == "--quote" ]; then ISCP_QUOTE="--protect-args"; fi
 
 #check for identity argument
 if [ ${!i} == "--ssh-agent" ]; then ISCP_SSH_AGENT=1;
@@ -255,8 +294,6 @@ fi
 #check for retry option
 if [ ${!i} == "--retry" ]; then ISCP_RETRY=1; fi
 
-#check for size option
-if [ ${!i} == "--size" ]; then ISCP_SIZE=1; fi
 
 done
 #command line parameter parsing finished
@@ -300,27 +337,33 @@ ISCP_SOURCE_DIR=$(echo "$ISCP_SOURCE" | sed 's/.*://g')
 #get directory listing from remote server
 echo "Connecting to $ISCP_SOURCE_SERVER on port $ISCP_PORT in ${ISCP_SOURCE_DIR}"
 
+
+#get ls listing & size with single ssh command
 #cycle through elements and create array
 i=0
-for fod in $(ssh -p $ISCP_PORT $ISCP_SOURCE_SERVER ls -F $ISCP_SOURCE_DIR )
+j=0
+for fod in $(ssh -p $ISCP_PORT $ISCP_SOURCE_SERVER "ls -F $ISCP_SOURCE_DIR ; echo '##END-LS##'; cd $ISCP_SOURCE_DIR ; du --si --max-depth=0 *")
 do
+if [ $fod == "##END-LS##" ]; then ISCP_TICK=1; continue;fi
+
+#extract ls -F command
+if [ $ISCP_TICK -eq 0 ]; then
 ISCP_FILE_ARRAY[i]=$fod
 i=$((i+1))
+fi
+
+#extract du --si --max-depth=0 command
+if [ $ISCP_TICK -eq 1 ]; then
+ISCP_FILE_SIZE_ARRAY[j]=$(echo "$fod" | awk '{print $1}' )
+j=$((j+1))
+fi
+
 done
+
 
 #check to see we actually found stuff to download
 if [ ${#ISCP_FILE_ARRAY[*]} -eq 0 ]; then echo "Error: Nothing to Download!" 1>&2; kill-ssh-agent ; exit 1; fi
 
-#if user wants file sizes, then get listing
-if [ $ISCP_SIZE -eq 1 ]; then
-i=0
-#connect to server again
-for duoutput in $(ssh -p $ISCP_PORT $ISCP_SOURCE_SERVER 'cd' $ISCP_SOURCE_DIR '; du --si --max-depth=0 *')
-do
-ISCP_FILE_SIZE_ARRAY[i]=$( echo "$duoutput" | awk '{print $1}')
-i=$((i+1))
-done
-fi
 
 #show user menu 
 user-menu
@@ -340,7 +383,7 @@ if [ -d ${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]} ]; then
 #directory already exists on local system
 
 #decide to use user input if --auto is set to 0
-if [ $ISCP_AUTO -eq 1 ]; then resume-dir; else
+if [ $ISCP_RESUME -eq 1 ]; then resume-dir; else
 #bring up prompt to ask user what to do
 drq-dir-prompt
 fi
@@ -359,7 +402,7 @@ if [ -f ${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]} ]; then
 #file already exists on local system
 
 #decide to use user input if --auto is set to 0
-if [ $ISCP_AUTO -eq 1 ]; then resume-file; else
+if [ $ISCP_RESUME -eq 1 ]; then resume-file; else
 #bring up prompt to ask user what to do
 drq-file-prompt
 fi
