@@ -1,4 +1,4 @@
-#!/bin/bash   
+#!/bin/bash 
 #iscp
 # Copyright (C) 2009 Daniel Liew
 #
@@ -26,8 +26,8 @@ declare -x ISCP_RESUME=0
 declare -xi ISCP_SSH_AGENT=0
 declare -x ISCP_IDENTITY_FILE=""
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2c"
-declare -x ISCP_BW_LIMIT="" #IF YOU NEED TO SET A DEFAULT MUST BE SET e.g. ="--bwlimit=20"
+declare -x ISCP_VERSION="0.2d"
+declare -x ISCP_BW_LIMIT="" #IF YOU NEED TO SET A DEFAULT MUST BE SET LIKE ="--bwlimit=20" (KB/s)
 declare -x ISCP_QUOTE="" #LEAVE THIS ALONE
 
 #declare other variables
@@ -88,12 +88,14 @@ exit 1
 
 function kill-ssh-agent() {
 #kill ssh-agent if user chose to user it and the PID associated is still active
-if [ $ISCP_SSH_AGENT -eq 1 -a $(ps --pid $SSH_AGENT_PID | wc -l) -eq 2 ]; then 
+if [ $ISCP_SSH_AGENT -eq 1 ]; then 
+#do seperate if just incase no SSH_AGENT which causes ps to through error as no PID is given to --pid argument
+if [ $(ps --pid $SSH_AGENT_PID 2> /dev/null | wc -l) -eq 2 ]; then
 echo -n "Killing ssh-agent..."
-kill -15 $SSH_AGENT_PID
+eval `ssh-agent -k`
 if [ $? -eq 0 ]; then echo "success" ; else echo "Failed to kill ssh-agent PID: $SSH_AGENT_PID" 1>&2; fi
 
-
+fi
 fi
 }
 
