@@ -26,8 +26,9 @@ declare -x ISCP_RESUME=0
 declare -xi ISCP_SSH_AGENT=0
 declare -x ISCP_IDENTITY_FILE=""
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2d"
-declare -x ISCP_BW_LIMIT="" #IF YOU NEED TO SET A DEFAULT MUST BE SET LIKE ="--bwlimit=20" (KB/s)
+declare -x ISCP_VERSION="0.2e"
+declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
+declare -x ISCP_BW_LIMIT_OPT #LEAVE THIS ALONE
 declare -x ISCP_QUOTE="" #LEAVE THIS ALONE
 
 #declare other variables
@@ -36,11 +37,13 @@ declare -x ISCP_SOURCE_DIR
 declare -ax ISCP_FILE_ARRAY
 declare -ax ISCP_USER_CHOICE
 declare -ax ISCP_FILE_SIZE_ARRAY
-declare -ix ISCP_TICK=0 #LEAVE THIS ALONE!
+declare -ix ISCP_TICK=0 #LEAVE THIS ALONE IT IS USED FOR PROCESSING STDOUT FROM SSH COMMAND
+declare -x ISCP_PARAM_VALUE_REGEX="[]A-Za-z0-9_-:@#!~./ [)(]+$" #SET REGEX (extended) for parsing config file parameter values
+declare -x ISCP_PARAM_NAME_REGEX="^[A-Z_]+" #SET REGEX (extended) for parsing config file parameter names
 
 #start functions
 function usage() {
-echo "Usage: iscp --help | [--bwlimit KBPS] [--port PORT] [--quote] [--ssh-agent [IDENTITY_FILE] ] [--resume] [--retry] [source_directory target_directory]
+echo "Usage: iscp --help | [--bwlimit KBPS] [--config CONFIG_FILE ] [--port PORT] [--quote] [--ssh-agent [IDENTITY_FILE] ] [--resume] [--retry] [source_directory target_directory]
 
 DESCRIPTON
 iscp is an interactive version of scp written in BASH using rsync. When iscp is run it will perform an ls command and a du (--si option) on the remote system and then present the user with a numbered list of files and directories to download (if available). The user then enters a space seperated list of item number(s) the user wishes to download. iscp will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then iscp will ask the user what to do (download/resume/skip/quit) unless the --auto option is set. 
@@ -49,6 +52,9 @@ OPTIONS
 
 --bwlimit KBPS
 Sets a bandwidth in KB/s when downloading files. No limit is applied to the downloading of the file list.
+
+--config CONFIG_FILE
+This option allows you to load a configuration file in which you can set various iscp parameters. Any options specified on the command line will overide settings in the configuration file. Details of possible parameters are described in the CONFIGURATION FILE section. 
 
 --port PORT
 This option allows the user to set the port number to use for ssh connections.
@@ -64,6 +70,27 @@ If iscp finds an existing file/directory in the target directory then iscp will 
 
 --retry
 This option will force iscp to keep trying to do a file transfer until it receives an error code of 0. This is useful if your connection is dropped because it will automatically try to resume the file transfer. Job suspend can get you out of this (usually CTRL+Z) then kill %JOB_NUMBER .
+
+CONFIGURATION FILE
+A configuration file allows you define iscp paramters. The file must be a UNIX text file. The parameter name must match the regular expression $ISCP_PARAM_NAME_REGEX and the paramter value must match the regular expression $ISCP_PARAM_VALUE_REGEX (note these are extended regular expressions to be used with the program grep). If a line does not match then iscp will ignore it. Each paramter must be specified on a seperate line. The format of the configuration file is PARAMETER_NAME=PARAMETER_VALUE .
+
+The following parameters are available:
+SOURCE		- specifies source e.g. user@localhost:/home/user/
+TARGET_DIR	- specifies local target directory
+RESUME		- Boolean (0 or 1). Specifies whether to use --resume option
+SSH_AGENT	- Boolean (0 or 1). Specifies whether to use --ssh-agent option
+IDENTITY_FILE	- specifies location of identity file to used with ssh-agent (this has no effect unless --ssh-agent option is set or SSH_AGENT is set in configuration file)
+RETRY		- Boolean (0 or 1). Specifies whether to use --retry option
+BW_LIMIT	- Set bandwidth limit in KB/s
+
+An example configuration file might read as follows
+
+#set my source
+SOURCE=user@localhost:/home/user
+#enable automatic resume
+RESUME=1
+#set bandwidth limit to 100KB/s
+BW_LIMIT=100
 
 LICENSE
 COPYRIGHT (C) 2009 Daniel Liew
@@ -187,10 +214,10 @@ ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 fi
 
 
-if [ ! -z $ISCP_BW_LIMIT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT" | sed 's/--bwlimit=//g')KB/s"; fi
-rsync --rsh="ssh -p $ISCP_PORT" $ISCP_BW_LIMIT $ISCP_QUOTE --port $ISCP_PORT --progress --recursive --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
-# if rsync fails and user specified --retry retry rsync command indefinitely
-if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "Directory Transfer failure...retrying" 1>&2; fresh-dir; fi
+if [ ! -z $ISCP_BW_LIMIT_OPT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; fi
+rsync --rsh="ssh -p $ISCP_PORT" $ISCP_BW_LIMIT_OPT $ISCP_QUOTE --port $ISCP_PORT --progress --human-readable --recursive --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
+# if rsync fails and user specified --retry retry rsync command indefinitely #FIXED if failed do resume-dir
+if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "Directory Transfer failure...retrying" 1>&2; resume-dir; fi
 }
 
 function resume-dir() {
@@ -203,8 +230,8 @@ else
 ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 fi
 
-if [ ! -z $ISCP_BW_LIMIT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT" | sed 's/--bwlimit=//g')KB/s"; fi
-rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT $ISCP_QUOTE --port $ISCP_PORT --progress --partial --recursive  "$ISCP_ESC_SOURCE"  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
+if [ ! -z $ISCP_BW_LIMIT_OPT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; fi
+rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE --port $ISCP_PORT --progress --human-readable --partial --recursive  "$ISCP_ESC_SOURCE"  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
 # if rsync fails and user specified --retry retry rsync command indefinitely
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "Directory Transfer failure...retrying" 1>&2; resume-dir; fi
 }
@@ -222,10 +249,10 @@ else
 ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 fi
 
-if [ ! -z $ISCP_BW_LIMIT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT" | sed 's/--bwlimit=//g')KB/s"; fi
-rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT $ISCP_QUOTE --port $ISCP_PORT --progress --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
-# if rsync fails and user specified --retry retry rsync command indefinitely
-if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "File Transfer failure...retrying" 1>&2; fresh-file; fi
+if [ ! -z $ISCP_BW_LIMIT_OPT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; fi
+rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE --port $ISCP_PORT --progress --human-readable --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
+# if rsync fails and user specified --retry retry rsync command indefinitely #FIXED if failed do resume-fil
+if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "File Transfer failure...retrying" 1>&2; resume-file; fi
 }
 
 function resume-file() {
@@ -239,8 +266,8 @@ ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 fi
 
 
-if [ ! -z $ISCP_BW_LIMIT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT" | sed 's/--bwlimit=//g')KB/s"; fi
-rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT $ISCP_QUOTE --port $ISCP_PORT --progress --partial  "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
+if [ ! -z $ISCP_BW_LIMIT_OPT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; fi
+rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE --port $ISCP_PORT --progress --human-readable --partial  "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
 # if rsync fails and user specified --retry retry rsync command indefinitely
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "File Transfer failure...retrying" 1>&2; resume-file; fi
 }
@@ -248,14 +275,38 @@ if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "File Transfer failure...retryin
 
 #start program
 
+#check for a config file option and load its options (we do this before processing other command line arguments so they can overwrite config file)
+for ((i=1; i<=$#; i++)); do
+
+#check for --config argument
+if [ ${!i} == "--config" ]; then
+i=$((i+1))
+if [ -r "${!i}" -a -f "${!i}"  ]; then
+#user has read permission for config file that exists and is a file
+echo -e "Reading configuration file: ${!i}\n";
+while read option; do
+#check line contains iscp setting
+if [ $( echo "$option" | grep -Ec "${ISCP_PARAM_NAME_REGEX}=${ISCP_PARAM_VALUE_REGEX}" ) -eq 1 ]; then
+#we've found an option set it
+echo "Setting...${option}"
+eval  ISCP_$( echo "$option" | grep -Eo "$ISCP_PARAM_NAME_REGEX" )=\"$(echo "$option" | grep -Eo "$ISCP_PARAM_VALUE_REGEX" )\"
+fi
+
+done <<< "$(cat ${!i})"
+
+
+else echo "Error: configuration file ${!i} is not readable!" 1>&2; exit; fi
+fi
+
+done
+
+
 #cycle through commandline arguments
 for ((i=1; i<=$#; i++))
 do
 
 #check for sourcedir and target dir arguments
 if [ $(($# - 1)) -eq $i -a $(echo ${!i} | cut -c1,2 ) != "--" -a $(echo ${!#} | cut -c1,2) != "--" ]; then ISCP_SOURCE=${!i}; i=$((i+1)); ISCP_TARGET_DIR=${!i}; fi
-#j=$(($# -1))
-#if [ $(echo ${!j} | sed 's/[^-]//g' | wc -m) -ne 3 -a $(echo ${!#} | sed 's/[^-]//g' | wc -m) -ne 3 ]; then ISCP_SOURCE=${!j};  ISCP_TARGET_DIR=${!#}; fi
 
 #check for --resume argument
 if [ ${!i} == "--resume" ]; then ISCP_RESUME=1; fi
@@ -273,7 +324,7 @@ fi
 #check for --bwlimit argument
 if [ ${!i} == "--bwlimit" ]; then i=$((i +1));
 if [ $( echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then echo "Error: Bandwidth limit is invalid!" 1>&2; usage; fi
-ISCP_BW_LIMIT="--bwlimit=${!i}"
+ISCP_BW_LIMIT="${!i}"
 fi
 
 #check for --quote argument
@@ -298,6 +349,10 @@ if [ ${!i} == "--retry" ]; then ISCP_RETRY=1; fi
 
 
 done
+
+#set bandwidth limit option if necessary
+if [ ! -z "$ISCP_BW_LIMIT" ]; then ISCP_BW_LIMIT_OPT="--bwlimit=${ISCP_BW_LIMIT}"; else ISCP_BW_LIMIT_OPT=""; fi
+
 #command line parameter parsing finished
 
 #add check for ssh, rsync
