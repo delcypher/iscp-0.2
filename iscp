@@ -18,7 +18,6 @@
 
 
 #Set Defaults
-
 declare -x ISCP_SOURCE=""
 declare -x ISCP_TARGET_DIR=${PWD}/
 declare -ix ISCP_PORT=22
@@ -26,10 +25,9 @@ declare -x ISCP_RESUME=0
 declare -xi ISCP_SSH_AGENT=0
 declare -x ISCP_IDENTITY_FILE=""
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2e"
+declare -x ISCP_VERSION="0.2f"
 declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
-declare -x ISCP_BW_LIMIT_OPT #LEAVE THIS ALONE
-declare -x ISCP_QUOTE="" #LEAVE THIS ALONE
+declare -x ISCP_QUOTE=0
 
 #declare other variables
 declare -x ISCP_SOURCE_SERVER
@@ -40,6 +38,8 @@ declare -ax ISCP_FILE_SIZE_ARRAY
 declare -ix ISCP_TICK=0 #LEAVE THIS ALONE IT IS USED FOR PROCESSING STDOUT FROM SSH COMMAND
 declare -x ISCP_PARAM_VALUE_REGEX="[]A-Za-z0-9_-:@#!~./ [)(]+$" #SET REGEX (extended) for parsing config file parameter values
 declare -x ISCP_PARAM_NAME_REGEX="^[A-Z_]+" #SET REGEX (extended) for parsing config file parameter names
+declare -x ISCP_QUOTE_OPT="" #LEAVE THIS ALONE
+declare -x ISCP_BW_LIMIT_OPT #LEAVE THIS ALONE
 
 #start functions
 function usage() {
@@ -72,7 +72,7 @@ If iscp finds an existing file/directory in the target directory then iscp will 
 This option will force iscp to keep trying to do a file transfer until it receives an error code of 0. This is useful if your connection is dropped because it will automatically try to resume the file transfer. Job suspend can get you out of this (usually CTRL+Z) then kill %JOB_NUMBER .
 
 CONFIGURATION FILE
-A configuration file allows you define iscp paramters. The file must be a UNIX text file. The parameter name must match the regular expression $ISCP_PARAM_NAME_REGEX and the paramter value must match the regular expression $ISCP_PARAM_VALUE_REGEX (note these are extended regular expressions to be used with the program grep). If a line does not match then iscp will ignore it. Each paramter must be specified on a seperate line. The format of the configuration file is PARAMETER_NAME=PARAMETER_VALUE .
+A configuration file allows you define iscp paramters. The file must be a UNIX text file. The parameter name must match the regular expression $ISCP_PARAM_NAME_REGEX and the paramter value must match the regular expression $ISCP_PARAM_VALUE_REGEX (note these are extended regular expressions to be used with the program grep). If a line does not match then iscp will ignore it. Each paramter must be specified on a seperate line. The format of the configuration file is PARAMETER_NAME=PARAMETER_VALUE . Any line that fit the regular expression will be ignored and could be used as a comment. However is common practice to use the # symbol at the beginning of a line to indicate it is a comment line.
 
 The following parameters are available:
 SOURCE		- specifies source e.g. user@localhost:/home/user/
@@ -82,6 +82,7 @@ SSH_AGENT	- Boolean (0 or 1). Specifies whether to use --ssh-agent option
 IDENTITY_FILE	- specifies location of identity file to used with ssh-agent (this has no effect unless --ssh-agent option is set or SSH_AGENT is set in configuration file)
 RETRY		- Boolean (0 or 1). Specifies whether to use --retry option
 BW_LIMIT	- Set bandwidth limit in KB/s
+QUOTE		- Boolean (0 or 1). Specifies whether to use --quote option
 
 An example configuration file might read as follows
 
@@ -108,6 +109,8 @@ This program is free software: you can redistribute it and/or modify
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 VERSION: $ISCP_VERSION
+
+ACKNOWLEDGEMENTS: Thanks to Brendan Le Foll for testing and hunting for bugs. Thanks to Mark G. Sobell for writing such a good book.
 " 1>&2
 exit 1
 
@@ -206,7 +209,7 @@ echo -e "\nFresh directory download: ${ISCP_FILE_ARRAY[file_no]}"
 #if old dir exists then remove it
 if [ -d "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ]; then echo -n "removing existing directory..."; rm -r  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ; echo "starting download..."; fi
 
-if [ -z $ISCP_QUOTE ]; then
+if [ -z $ISCP_QUOTE_OPT ]; then
 #fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
 ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g')
 else
@@ -215,7 +218,7 @@ fi
 
 
 if [ ! -z $ISCP_BW_LIMIT_OPT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; fi
-rsync --rsh="ssh -p $ISCP_PORT" $ISCP_BW_LIMIT_OPT $ISCP_QUOTE --port $ISCP_PORT --progress --human-readable --recursive --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
+rsync --rsh="ssh -p $ISCP_PORT" $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --recursive --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
 # if rsync fails and user specified --retry retry rsync command indefinitely #FIXED if failed do resume-dir
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "Directory Transfer failure...retrying" 1>&2; resume-dir; fi
 }
@@ -223,7 +226,7 @@ if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "Directory Transfer failure...re
 function resume-dir() {
 echo -e "\nResume directory download: ${ISCP_FILE_ARRAY[file_no]}"
 
-if [ -z $ISCP_QUOTE ]; then
+if [ -z $ISCP_QUOTE_OPT ]; then
 #fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
 ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g')
 else
@@ -231,7 +234,7 @@ ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 fi
 
 if [ ! -z $ISCP_BW_LIMIT_OPT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; fi
-rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE --port $ISCP_PORT --progress --human-readable --partial --recursive  "$ISCP_ESC_SOURCE"  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
+rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --partial --recursive  "$ISCP_ESC_SOURCE"  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
 # if rsync fails and user specified --retry retry rsync command indefinitely
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "Directory Transfer failure...retrying" 1>&2; resume-dir; fi
 }
@@ -242,7 +245,7 @@ echo -e "\nFresh file download: ${ISCP_FILE_ARRAY[file_no]}"
 #if old file exists then remove it
 if [ -f "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ]; then echo -n "removing existing file..."; rm  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ; echo "starting download..."; fi
 
-if [ -z $ISCP_QUOTE ]; then
+if [ -z $ISCP_QUOTE_OPT ]; then
 #fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
 ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g')
 else
@@ -250,7 +253,7 @@ ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 fi
 
 if [ ! -z $ISCP_BW_LIMIT_OPT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; fi
-rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE --port $ISCP_PORT --progress --human-readable --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
+rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
 # if rsync fails and user specified --retry retry rsync command indefinitely #FIXED if failed do resume-fil
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "File Transfer failure...retrying" 1>&2; resume-file; fi
 }
@@ -258,7 +261,7 @@ if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "File Transfer failure...retryin
 function resume-file() {
 echo -e "\nResume file download: ${ISCP_FILE_ARRAY[file_no]}"
 
-if [ -z $ISCP_QUOTE ]; then
+if [ -z $ISCP_QUOTE_OPT ]; then
 #fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
 ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g')
 else
@@ -267,7 +270,7 @@ fi
 
 
 if [ ! -z $ISCP_BW_LIMIT_OPT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; fi
-rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE --port $ISCP_PORT --progress --human-readable --partial  "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
+rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --partial  "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
 # if rsync fails and user specified --retry retry rsync command indefinitely
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "File Transfer failure...retrying" 1>&2; resume-file; fi
 }
@@ -283,7 +286,7 @@ if [ ${!i} == "--config" ]; then
 i=$((i+1))
 if [ -r "${!i}" -a -f "${!i}"  ]; then
 #user has read permission for config file that exists and is a file
-echo -e "Reading configuration file: ${!i}\n";
+echo "Reading configuration file: ${!i}";
 while read option; do
 #check line contains iscp setting
 if [ $( echo "$option" | grep -Ec "${ISCP_PARAM_NAME_REGEX}=${ISCP_PARAM_VALUE_REGEX}" ) -eq 1 ]; then
@@ -328,7 +331,7 @@ ISCP_BW_LIMIT="${!i}"
 fi
 
 #check for --quote argument
-if [ ${!i} == "--quote" ]; then ISCP_QUOTE="--protect-args"; fi
+if [ ${!i} == "--quote" ]; then ISCP_QUOTE=1; fi
 
 #check for identity argument
 if [ ${!i} == "--ssh-agent" ]; then ISCP_SSH_AGENT=1;
@@ -352,6 +355,9 @@ done
 
 #set bandwidth limit option if necessary
 if [ ! -z "$ISCP_BW_LIMIT" ]; then ISCP_BW_LIMIT_OPT="--bwlimit=${ISCP_BW_LIMIT}"; else ISCP_BW_LIMIT_OPT=""; fi
+
+#set ISCP_QUOTE_OPT if necessary
+if [ $ISCP_QUOTE -eq 1 ]; then ISCP_QUOTE_OPT="--protect-args"; fi
 
 #command line parameter parsing finished
 
