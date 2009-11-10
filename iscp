@@ -1,4 +1,4 @@
-#!/bin/bash 
+#!/bin/bash
 #iscp
 # Copyright (C) 2009 Daniel Liew
 #
@@ -25,7 +25,7 @@ declare -x ISCP_RESUME=0
 declare -xi ISCP_SSH_AGENT=0
 declare -x ISCP_IDENTITY_FILE=""
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2f"
+declare -x ISCP_VERSION="0.2g"
 declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
 declare -x ISCP_QUOTE=0
 
@@ -40,15 +40,25 @@ declare -x ISCP_PARAM_VALUE_REGEX="[]A-Za-z0-9_-:@#!~./ [)(]+$" #SET REGEX (exte
 declare -x ISCP_PARAM_NAME_REGEX="^[A-Z_]+" #SET REGEX (extended) for parsing config file parameter names
 declare -x ISCP_QUOTE_OPT="" #LEAVE THIS ALONE
 declare -x ISCP_BW_LIMIT_OPT #LEAVE THIS ALONE
+declare -x ISCP_RSYNC_SIGNAL="" #LEAVE THIS ALONE
 
 #start functions
 function usage() {
-echo "Usage: iscp --help | [--bwlimit KBPS] [--config CONFIG_FILE ] [--port PORT] [--quote] [--ssh-agent [IDENTITY_FILE] ] [--resume] [--retry] [source_directory target_directory]
+echo "Usage: iscp --help | --iscp-pause | --iscp-unpause | [--bwlimit KBPS] [--config CONFIG_FILE ] [--port PORT] [--quote] [--ssh-agent [IDENTITY_FILE] ] [--resume] [--retry] [source_directory target_directory]
 
 DESCRIPTON
-iscp is an interactive version of scp written in BASH using rsync. When iscp is run it will perform an ls command and a du (--si option) on the remote system and then present the user with a numbered list of files and directories to download (if available). The user then enters a space seperated list of item number(s) the user wishes to download. iscp will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then iscp will ask the user what to do (download/resume/skip/quit) unless the --auto option is set. 
+iscp is an interactive version of scp written in BASH using rsync. When iscp is ran it will perform an ls command and a du (--si option) on the remote system and then present the user with a numbered list of files and directories to download (if available). The user then enters a space seperated list of item number(s) the user wishes to download. iscp will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then iscp will ask the user what to do (download/resume/skip/quit) unless the --resume option is set. 
 
 OPTIONS
+
+--help
+Displays this help message and exits.
+
+--iscp-pause
+This will present the user with a list of currently running iscp transfers on the local system and will allow the user to pause them and then exit. Warning this feature is highly experimental. This feature actually sends a -SIGSTOP to rsync.
+
+--iscp-unpause
+This will present the user with a list of currently running iscp transfers on the local system and will allow the user to unpause them and exit. Warning this feature is highly experimental. This feature actually sends a -SIGCONT to rsync.
 
 --bwlimit KBPS
 Sets a bandwidth in KB/s when downloading files. No limit is applied to the downloading of the file list.
@@ -72,7 +82,7 @@ If iscp finds an existing file/directory in the target directory then iscp will 
 This option will force iscp to keep trying to do a file transfer until it receives an error code of 0. This is useful if your connection is dropped because it will automatically try to resume the file transfer. Job suspend can get you out of this (usually CTRL+Z) then kill %JOB_NUMBER .
 
 CONFIGURATION FILE
-A configuration file allows you define iscp paramters. The file must be a UNIX text file. The parameter name must match the regular expression $ISCP_PARAM_NAME_REGEX and the paramter value must match the regular expression $ISCP_PARAM_VALUE_REGEX (note these are extended regular expressions to be used with the program grep). If a line does not match then iscp will ignore it. Each paramter must be specified on a seperate line. The format of the configuration file is PARAMETER_NAME=PARAMETER_VALUE . Any line that fit the regular expression will be ignored and could be used as a comment. However is common practice to use the # symbol at the beginning of a line to indicate it is a comment line.
+A configuration file allows you define iscp paramters. The file must be a UNIX text file. The parameter name must match the regular expression $ISCP_PARAM_NAME_REGEX and the paramter value must match the regular expression $ISCP_PARAM_VALUE_REGEX (note these are extended regular expressions to be used with the program grep). If a line does not match then iscp will ignore it. Each paramter must be specified on a seperate line. The format of the configuration file is PARAMETER_NAME=PARAMETER_VALUE . Any line that fits the regular expression will be ignored and could be used as a comment. However it is common practice to use the # symbol at the beginning of a line to indicate it is a comment line so it is recommended you follow this convention.
 
 The following parameters are available:
 SOURCE		- specifies source e.g. user@localhost:/home/user/
@@ -127,6 +137,67 @@ if [ $? -eq 0 ]; then echo "success" ; else echo "Failed to kill ssh-agent PID: 
 
 fi
 fi
+}
+
+function signal-rsync() {
+#check at least 1 copy of iscp is running # fix not show currently running
+ISCP_CURRENT_PID=$$
+ISCP_CURRENT_PROCESSES=$(pgrep -x iscp)
+if [ $( echo "$ISCP_CURRENT_PROCESSES" | grep -v $ISCP_CURRENT_PID | wc -l ) -eq 0 ]; then 
+echo "Error: No Running instances of iscp" 1>&2
+exit 1
+fi
+
+i=0
+for pid in $( pgrep -P $( pgrep -d',' -P $(pgrep -d',' iscp)) -x rsync )
+do
+ISCP_R_PID_LIST[i]=$pid
+i=$(( i+1))
+done;
+
+#display list with downloading item
+echo "Currently running iscp transfers:"
+for ((i=0; i<= ${#ISCP_R_PID_LIST[*]} -1; i++)); do
+#display array item number and remote location
+echo "[$i] " $( ps --no-headers -o cmd -p ${ISCP_R_PID_LIST[i]} | sed 's/^.\+ --\([a-z]\+\) //g' | sed 's/\([^\]\) .\+$/\1/g')
+done;
+
+#prompt user for process to send SIGSTOP/SIGCONT to
+if [ "$ISCP_RSYNC_SIGNAL" == "-SIGSTOP" ]; then echo -n "Enter Process number(s) (space seperator) to pause or q (quit)?";
+elif [ "$ISCP_RSYNC_SIGNAL" == "-SIGCONT" ]; then echo -n "Enter Process number(s) (space seperator) to unpause or q (quit)?"; 
+else echo "ERROR: VARIABLE ISCP_RSYNC_SIGNAL DOES NOT SPECIFY VALID SIGNAL!" 2>&1 ; exit 1; fi
+
+
+
+read -a ISCP_PROCESS_CHOICE
+if [ ${#ISCP_PROCESS_CHOICE[*]} -eq 0 ]; then echo "Error: No process number(s) specified" 1>&2 ; signal-rsync; fi
+if [ ${ISCP_PROCESS_CHOICE[0]} == "q" ]; then echo "Quitting..." 1>&2; exit 0; fi
+
+#parse users input (make sure each element of ISCP_PROCESS_CHOICE IS a number and isn't larger than ${#IFS_FILE_ARRAY[*]} -1
+for ((i=0; i<= ${#ISCP_PROCESS_CHOICE[*]} -1; i++))
+do
+if [ $( echo "${ISCP_PROCESS_CHOICE[i]}" | grep -cE '^[0-9]+$' ) -ne 1 ]; then echo "Error: ${ISCP_PROCESS_CHOICE[i]} is not a valid number" 1>&2 ; signal-rsync; break; fi
+if [ ${ISCP_PROCESS_CHOICE[i]} -gt $(( ${#ISCP_R_PID_LIST[*]} - 1)) ]; then echo "Error: ${ISCP_PROCESS_CHOICE[i]} is not in the running process list" 1>&2; signal-rsync; break; fi
+done
+
+#cycle through user's choices
+for ((i=0; i<=${#ISCP_PROCESS_CHOICE[*]} -1; i++))
+do
+ISCP_TEMP_NO=${ISCP_PROCESS_CHOICE[i]}
+if [ "$ISCP_RSYNC_SIGNAL" == "-SIGSTOP" ]; then echo -n "Sending signal -SIGSTOP to PID:" ${ISCP_R_PID_LIST[ISCP_TEMP_NO]} "..." ;fi
+if [ "$ISCP_RSYNC_SIGNAL" == "-SIGCONT" ]; then echo -n "Sending signal -SIGCONT to PID:" ${ISCP_R_PID_LIST[ISCP_TEMP_NO]} "..." ;fi
+
+kill $ISCP_RSYNC_SIGNAL ${ISCP_R_PID_LIST[ISCP_TEMP_NO]} 2> /dev/null
+if [ $? -eq 0 ]; then echo "Success"; else echo "Failure!"; fi
+done
+}
+
+function bash-escape() {
+# function to read from standard input and append slash to the following shell characters
+# [ ] ( ) & ' and whitespace
+while read input ; do
+echo "$input" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g' | sed 's/&/\\&/g' | sed 's/\[/\\[/g' | sed 's/\]/\\]/g' | sed 's/'\''/\\'\''/g'
+done;
 }
 
 function user-menu() {
@@ -211,7 +282,7 @@ if [ -d "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ]; then echo -n "removin
 
 if [ -z $ISCP_QUOTE_OPT ]; then
 #fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
-ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g')
+ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | bash-escape )
 else
 ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 fi
@@ -228,7 +299,7 @@ echo -e "\nResume directory download: ${ISCP_FILE_ARRAY[file_no]}"
 
 if [ -z $ISCP_QUOTE_OPT ]; then
 #fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
-ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g')
+ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | bash-escape )
 else
 ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 fi
@@ -247,7 +318,7 @@ if [ -f "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ]; then echo -n "removin
 
 if [ -z $ISCP_QUOTE_OPT ]; then
 #fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
-ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g')
+ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | bash-escape )
 else
 ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 fi
@@ -263,7 +334,7 @@ echo -e "\nResume file download: ${ISCP_FILE_ARRAY[file_no]}"
 
 if [ -z $ISCP_QUOTE_OPT ]; then
 #fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
-ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | sed 's/ /\\ /g' | sed 's/(/\\(/g' | sed 's/)/\\)/g')
+ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | bash-escape )
 else
 ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 fi
@@ -316,6 +387,12 @@ if [ ${!i} == "--resume" ]; then ISCP_RESUME=1; fi
 
 #check for --help argument
 if [ ${!i} == "--help" ]; then usage; fi 
+
+#check for --iscp-pause argument
+if [ ${!i} == "--iscp-pause" ]; then ISCP_RSYNC_SIGNAL="-SIGSTOP"; signal-rsync; exit ; fi
+
+#check for --iscp-unpause argument
+if [ ${!i} == "--iscp-unpause" ]; then ISCP_RSYNC_SIGNAL="-SIGCONT"; signal-rsync; exit ; fi
 
 #check for --port argument
 if [ ${!i} == "--port" ]; then i=$((i + 1)); 
