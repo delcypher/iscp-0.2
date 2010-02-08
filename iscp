@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash 
 #iscp
 # Copyright (C) 2009 Daniel Liew
 #
@@ -25,7 +25,7 @@ declare -x ISCP_RESUME=0
 declare -xi ISCP_SSH_AGENT=0
 declare -x ISCP_IDENTITY_FILE=""
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2g"
+declare -x ISCP_VERSION="0.2h"
 declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
 declare -x ISCP_QUOTE=0
 
@@ -44,7 +44,7 @@ declare -x ISCP_RSYNC_SIGNAL="" #LEAVE THIS ALONE
 
 #start functions
 function usage() {
-echo "Usage: iscp --help | --iscp-pause | --iscp-unpause | [--bwlimit KBPS] [--config CONFIG_FILE ] [--port PORT] [--quote] [--ssh-agent [IDENTITY_FILE] ] [--resume] [--retry] [source_directory target_directory]
+echo "Usage: iscp --help | --iscp-pause | --iscp-unpause | [--bwlimit KBPS] [--config CONFIG_FILE ] [--port PORT] [--quote] [--ssh-agent [IDENTITY_FILE] ] [--resume] [--retry] SOURCE_DIRECTORY TARGET_DIRECTORY
 
 DESCRIPTON
 iscp is an interactive version of scp written in BASH using rsync. When iscp is ran it will perform an ls command and a du (--si option) on the remote system and then present the user with a numbered list of files and directories to download (if available). The user then enters a space seperated list of item number(s) the user wishes to download. iscp will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then iscp will ask the user what to do (download/resume/skip/quit) unless the --resume option is set. 
@@ -121,7 +121,7 @@ This program is free software: you can redistribute it and/or modify
 VERSION: $ISCP_VERSION
 
 ACKNOWLEDGEMENTS: Thanks to Brendan Le Foll for testing and hunting for bugs. Thanks to Mark G. Sobell for writing such a good book.
-" 1>&2
+"
 exit 1
 
 }
@@ -353,7 +353,7 @@ if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "File Transfer failure...retryin
 for ((i=1; i<=$#; i++)); do
 
 #check for --config argument
-if [ ${!i} == "--config" ]; then
+if [ "${!i}" == "--config" ]; then
 i=$((i+1))
 if [ -r "${!i}" -a -f "${!i}"  ]; then
 #user has read permission for config file that exists and is a file
@@ -482,7 +482,7 @@ echo "Connecting to $ISCP_SOURCE_SERVER on port $ISCP_PORT in ${ISCP_SOURCE_DIR}
 #cycle through elements and create array
 i=0
 j=0
-for fod in $(ssh -p $ISCP_PORT $ISCP_SOURCE_SERVER "ls -F $ISCP_SOURCE_DIR ; echo '##END-LS##'; cd $ISCP_SOURCE_DIR ; du --si --max-depth=0 *")
+for fod in $(ssh -p $ISCP_PORT $ISCP_SOURCE_SERVER "ls -F '${ISCP_SOURCE_DIR}' ; echo '##END-LS##'; cd '$ISCP_SOURCE_DIR' ; du --si --max-depth=0 *")
 do
 if [ $fod == "##END-LS##" ]; then ISCP_TICK=1; continue;fi
 
