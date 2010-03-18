@@ -25,7 +25,7 @@ declare -x ISCP_RESUME=0
 declare -xi ISCP_SSH_AGENT=0
 declare -x ISCP_IDENTITY_FILE=""
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2h"
+declare -x ISCP_VERSION="0.2i"
 declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
 declare -x ISCP_QUOTE=0
 
@@ -460,7 +460,7 @@ if [ $( echo "$ISCP_SOURCE" | grep -c "/$") -eq 0 ]; then ISCP_SOURCE=${ISCP_SOU
 if [ $( echo "$ISCP_TARGET_DIR" | grep -c "/$") -eq 0 ]; then ISCP_TARGET_DIR=${ISCP_TARGET_DIR}/ ; fi
 
 #check format of ISCP_SOURCE is correct (only a rough check)
-if [ $( echo "$ISCP_SOURCE" | grep -Eci '^([a-z0-9_-]+@)?[0-9a-z.-]+:[0-9a-z/ ]+$') -ne 1 ]; then echo "Error: source directory is invalid, format must be [user@]hostname:/path/to/directory" 1>&2; exit; fi
+if [ $( echo "$ISCP_SOURCE" | grep -Eci '^([a-z0-9_-]+@)?[0-9a-z.-]+:[0-9a-z/ _.-]+$') -ne 1 ]; then echo "Error: source directory is invalid, format must be [user@]hostname:/path/to/directory" 1>&2; exit; fi
 
 #check target directory exists
 if [ ! -d "$ISCP_TARGET_DIR" ]; then echo "Error: target directory does not exist" 1>&2; exit 1; fi
