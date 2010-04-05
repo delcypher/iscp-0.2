@@ -21,13 +21,14 @@
 declare -x ISCP_SOURCE=""
 declare -x ISCP_TARGET_DIR=${PWD}/
 declare -ix ISCP_PORT=22
-declare -x ISCP_RESUME=0
-declare -xi ISCP_SSH_AGENT=0
-declare -x ISCP_IDENTITY_FILE=""
+declare -ix ISCP_RESUME=0
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2i"
+declare -x ISCP_VERSION="0.2j"
 declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
-declare -x ISCP_QUOTE=0
+declare -xi ISCP_QUOTE=0
+declare -xi ISCP_CREATE_SSH_CONTROL_MASTER=1
+declare -x ISCP_SSH_CONTROL_PATH="/tmp/$$.iscp.%h-%p" #Specifies location of control socket file for ssh control master. Blank will cause no SSH control master to be used
+declare -x ISCP_SSH_MASTER_OPT="-o ServerAliveCountMax=5 -o ServerAliveInterval=20" #Options sent to ssh master if we create it
 
 #declare other variables
 declare -x ISCP_SOURCE_SERVER
@@ -36,15 +37,16 @@ declare -ax ISCP_FILE_ARRAY
 declare -ax ISCP_USER_CHOICE
 declare -ax ISCP_FILE_SIZE_ARRAY
 declare -ix ISCP_TICK=0 #LEAVE THIS ALONE IT IS USED FOR PROCESSING STDOUT FROM SSH COMMAND
-declare -x ISCP_PARAM_VALUE_REGEX="[]A-Za-z0-9_-:@#!~./ [)(]+$" #SET REGEX (extended) for parsing config file parameter values
+declare -x ISCP_PARAM_VALUE_REGEX="[]A-Za-z0-9_-:@#!~./% [)(]+$" #SET REGEX (extended) for parsing config file parameter values
 declare -x ISCP_PARAM_NAME_REGEX="^[A-Z_]+" #SET REGEX (extended) for parsing config file parameter names
 declare -x ISCP_QUOTE_OPT="" #LEAVE THIS ALONE
 declare -x ISCP_BW_LIMIT_OPT #LEAVE THIS ALONE
 declare -x ISCP_RSYNC_SIGNAL="" #LEAVE THIS ALONE
+declare -x ISCP_SSH_CONTROL_PATH_OPT="" #LEAVE THIS ALONE
 
 #start functions
 function usage() {
-echo "Usage: iscp --help | --iscp-pause | --iscp-unpause | [--bwlimit KBPS] [--config CONFIG_FILE ] [--port PORT] [--quote] [--ssh-agent [IDENTITY_FILE] ] [--resume] [--retry] SOURCE_DIRECTORY TARGET_DIRECTORY
+echo "Usage: iscp --help | --iscp-pause | --iscp-unpause | [--bwlimit KBPS] [--config CONFIG_FILE ] [--no-ssh-master | --use-ssh-master SOCKET] [--port PORT] [--quote]  [--resume] [--retry] SOURCE_DIRECTORY TARGET_DIRECTORY
 
 DESCRIPTON
 iscp is an interactive version of scp written in BASH using rsync. When iscp is ran it will perform an ls command and a du (--si option) on the remote system and then present the user with a numbered list of files and directories to download (if available). The user then enters a space seperated list of item number(s) the user wishes to download. iscp will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then iscp will ask the user what to do (download/resume/skip/quit) unless the --resume option is set. 
@@ -66,14 +68,18 @@ Sets a bandwidth in KB/s when downloading files. No limit is applied to the down
 --config CONFIG_FILE
 This option allows you to load a configuration file in which you can set various iscp parameters. Any options specified on the command line will overide settings in the configuration file. Details of possible parameters are described in the CONFIGURATION FILE section. 
 
+--no-ssh-master
+This will prevent a ``master'' mode ssh connection from being made when iscp starts. This means that all subsequent ssh connections made will be independent from each other and will thus will each request a password unless a different form of automatic authentification is setup like public-key authentification.
+
+--use-ssh-master SOCKET
+Use an already established SSH master connection instead of creating one, where the socket file is SOCKET. This can be established by running ``ssh -M -S SOCKET host''. Note the following wildcards are available %h (host), %r (remote login username) and %p (port).
+
 --port PORT
 This option allows the user to set the port number to use for ssh connections.
 
 --quote
 This option sends the --protect-args option to rsync and is used to prevent the remote shell interpretting special characters in file/directory names (e.g. white space). Warning if the remote system has an old version of rsync that does not support this option then it will fail!
 
---ssh-agent [IDENTITY_FILE]
-This option loads ssh-agent and loads the identity file specified. If no identity file is specified then the user's default identites will be loaded. After iscp has finished executing the ssh-agent will be terminated. This option is useful if you have a key setup between your machine and the target machine as you will only need to enter your passphrase once.
 
 --resume
 If iscp finds an existing file/directory in the target directory then iscp will automatically try to resume the file transfer instead of prompting the user for an action.
@@ -88,11 +94,11 @@ The following parameters are available:
 SOURCE		- specifies source e.g. user@localhost:/home/user/
 TARGET_DIR	- specifies local target directory
 RESUME		- Boolean (0 or 1). Specifies whether to use --resume option
-SSH_AGENT	- Boolean (0 or 1). Specifies whether to use --ssh-agent option
-IDENTITY_FILE	- specifies location of identity file to used with ssh-agent (this has no effect unless --ssh-agent option is set or SSH_AGENT is set in configuration file)
 RETRY		- Boolean (0 or 1). Specifies whether to use --retry option
 BW_LIMIT	- Set bandwidth limit in KB/s
 QUOTE		- Boolean (0 or 1). Specifies whether to use --quote option
+CREATE_SSH_CONTROL_MASTER - Boolean (0 or 1). Specifies whether to create a SSH control master (opposite of --no-ssh-master option)
+SSH_CONTROL_PATH - specifies what the path to the SSH control master socket is. If CREATE_SSH_CONTROL_MASTER is set to 0 then you can specify an existing socket like the --use-ssh-master option
 
 An example configuration file might read as follows
 
@@ -126,17 +132,25 @@ exit 1
 
 }
 
-function kill-ssh-agent() {
-#kill ssh-agent if user chose to user it and the PID associated is still active
-if [ $ISCP_SSH_AGENT -eq 1 ]; then 
-#do seperate if just incase no SSH_AGENT which causes ps to through error as no PID is given to --pid argument
-if [ $(ps --pid $SSH_AGENT_PID 2> /dev/null | wc -l) -eq 2 ]; then
-echo -n "Killing ssh-agent..."
-eval `ssh-agent -k`
-if [ $? -eq 0 ]; then echo "success" ; else echo "Failed to kill ssh-agent PID: $SSH_AGENT_PID" 1>&2; fi
 
+#Close the ssh master connection if it should of been opened
+function ssh-master-exit() {
+if [  $ISCP_CREATE_SSH_CONTROL_MASTER -eq 1 ]; then
+#try to close the ssh control master
+unset IFS; #make sure we are using normal IFS so options to ssh are parsed correctly
+echo -ne "\nStoping SSH control master..."
+ssh ${ISCP_SSH_CONTROL_PATH_OPT} -O exit ${ISCP_SOURCE_SERVER}
+if [ $? -eq 0 ]; then echo "Success"; else echo "Failure!"; fi
 fi
-fi
+}
+
+#returns the socket path with %h substituted for the current host and %p for the current port - data passed on standard input
+function socket-path-translate() {
+while read input ; do
+USERNAME=$(echo "$ISCP_SOURCE_SERVER" | sed 's/\(.\+\)@.\+/\1/' ) #extract username
+if [ -z $USERNAME ]; then USERNAME=$(whoami); fi #if there is no username in ISCP_SOURCE_SERVER assume current username
+echo "$input" | sed 's/%h/'${ISCP_SOURCE_SERVER#*@}'/' | sed 's/%p/'${ISCP_PORT}'/' | sed 's/%r/'$USERNAME'/'
+done;
 }
 
 function signal-rsync() {
@@ -210,7 +224,7 @@ IFS=$' \t\n'
 echo -n "Enter file number(s) (space seperator) or q:"
 read -a ISCP_USER_CHOICE
 if [ ${#ISCP_USER_CHOICE[*]} -eq 0 ]; then echo "Error: No files specified, type q to quit."; user-menu; fi
-if [ ${ISCP_USER_CHOICE[0]} == "q" ]; then echo "Quitting..." 1>&2; kill-ssh-agent; exit 0; fi
+if [ ${ISCP_USER_CHOICE[0]} == "q" ]; then echo "Quitting..." 1>&2;  exit 0; fi
 #set IFS back
 IFS=$'\n'
 
@@ -236,7 +250,7 @@ r|R)
 resume-dir
 ;;
 q|Q)
-kill-ssh-agent; echo -e "\nQuitting..." 1>&2; exit 0;
+echo -e "\nQuitting..." 1>&2; exit 0;
 ;;
 s|S)
 echo -e "\nskip directory ${ISCP_FILE_ARRAY[file_no]}";
@@ -261,7 +275,7 @@ r|R)
 resume-file
 ;;
 q|Q)
-kill-ssh-agent; echo -e "\nQuitting..." 1>&2; exit 0;
+echo -e "\nQuitting..." 1>&2; exit 0;
 ;;
 s|S)
 echo -e "\nskip file ${ISCP_FILE_ARRAY[file_no]}";
@@ -289,7 +303,7 @@ fi
 
 
 if [ ! -z $ISCP_BW_LIMIT_OPT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; fi
-rsync --rsh="ssh -p $ISCP_PORT" $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --recursive --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
+rsync --rsh="ssh -p $ISCP_PORT $ISCP_SSH_CONTROL_PATH_OPT" $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --recursive --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
 # if rsync fails and user specified --retry retry rsync command indefinitely #FIXED if failed do resume-dir
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "Directory Transfer failure...retrying" 1>&2; resume-dir; fi
 }
@@ -305,7 +319,7 @@ ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 fi
 
 if [ ! -z $ISCP_BW_LIMIT_OPT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; fi
-rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --partial --recursive  "$ISCP_ESC_SOURCE"  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
+rsync --rsh="ssh -p $ISCP_PORT $ISCP_SSH_CONTROL_PATH_OPT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --partial --recursive  "$ISCP_ESC_SOURCE"  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
 # if rsync fails and user specified --retry retry rsync command indefinitely
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "Directory Transfer failure...retrying" 1>&2; resume-dir; fi
 }
@@ -324,7 +338,7 @@ ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 fi
 
 if [ ! -z $ISCP_BW_LIMIT_OPT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; fi
-rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
+rsync --rsh="ssh -p $ISCP_PORT $ISCP_SSH_CONTROL_PATH_OPT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
 # if rsync fails and user specified --retry retry rsync command indefinitely #FIXED if failed do resume-fil
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "File Transfer failure...retrying" 1>&2; resume-file; fi
 }
@@ -341,7 +355,7 @@ fi
 
 
 if [ ! -z $ISCP_BW_LIMIT_OPT ]; then echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; fi
-rsync --rsh="ssh -p $ISCP_PORT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --partial  "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
+rsync --rsh="ssh -p $ISCP_PORT $ISCP_SSH_CONTROL_PATH_OPT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --partial  "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
 # if rsync fails and user specified --retry retry rsync command indefinitely
 if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then echo "File Transfer failure...retrying" 1>&2; resume-file; fi
 }
@@ -394,6 +408,23 @@ if [ ${!i} == "--iscp-pause" ]; then ISCP_RSYNC_SIGNAL="-SIGSTOP"; signal-rsync;
 #check for --iscp-unpause argument
 if [ ${!i} == "--iscp-unpause" ]; then ISCP_RSYNC_SIGNAL="-SIGCONT"; signal-rsync; exit ; fi
 
+#check for --no-ssh-master argument
+if [ ${!i} == "--no-ssh-master" ]; then ISCP_CREATE_SSH_CONTROL_MASTER=0; ISCP_SSH_CONTROL_PATH_OPT="";fi
+
+#check for --use-ssh-master argument
+if [ ${!i} == "--use-ssh-master" ]; then
+	i=$((i +1));
+	ISCP_SSH_CONTROL_PATH=${!i};
+	ISCP_CREATE_SSH_CONTROL_MASTER=0;
+	if [ -S "$ISCP_SSH_CONTROL_PATH" ]; then
+	#socket exists
+	ISCP_SSH_CONTROL_PATH_OPT="-S ${ISCP_SSH_CONTROL_PATH}" #we will use this socket assuming that it is a socket for a master SSH Connection
+	echo "Using SSH control master on socket:${ISCP_SSH_CONTROL_PATH}"
+	else
+	echo "Error socket: ${ISCP_SSH_CONTROL_PATH} cannot be accessed" 1>&2; exit 1;
+	fi
+fi  
+
 #check for --port argument
 if [ ${!i} == "--port" ]; then i=$((i + 1)); 
 if [ -z ${!i} ]; then echo "Error: Port number not specified!" 1>&2 ; usage; fi
@@ -410,19 +441,6 @@ fi
 #check for --quote argument
 if [ ${!i} == "--quote" ]; then ISCP_QUOTE=1; fi
 
-#check for identity argument
-if [ ${!i} == "--ssh-agent" ]; then ISCP_SSH_AGENT=1;
-#see if next argument is the identity file or another option
-i=$((i+1))
-j=$((i+1))
-if [ "$(echo ${!i} | cut -c1,2)"  != "--" -a ! $i -gt $# -a ! $j -eq $# ]; then 
-#take IDENTITY_FILE parameter only if in correct place
-ISCP_IDENTITY_FILE=${!i}
-else
-i=$((i-1))
-fi
-unset j
-fi
 
 #check for retry option
 if [ ${!i} == "--retry" ]; then ISCP_RETRY=1; fi
@@ -443,18 +461,6 @@ if [ $(which ssh | wc -m) -eq 0 ]; then echo "Error: ssh command cannot be found
 if [ $(which rsync | wc -m) -eq 0 ]; then echo "Error: rsync cannot be found in PATH, it may not be installed." 1>&2; exit 1; fi
 
 
-#load ssh-agent if needed
-if [ $ISCP_SSH_AGENT -eq 1 ]; then
-echo -n "Loading ssh-agent..."
-eval `ssh-agent -s` #load ssh agent
-echo -n "Loading identities..."; if [ -z $ISCP_IDENTITY_FILE ]; then echo "Defaults"; else echo $ISCP_IDENTITY_FILE; fi
-ssh-add $ISCP_IDENTITY_FILE #load identity file, if blank ssh-add takes user defaults
-if [ $? -ne 0 ]; then kill-ssh-agent; fi
-fi
-
-#change IFS to allow filenames/directory names with spaces to processed
-IFS=$'\n'
-
 #append trailing slash to source dir and target dir if necessary
 if [ $( echo "$ISCP_SOURCE" | grep -c "/$") -eq 0 ]; then ISCP_SOURCE=${ISCP_SOURCE}/ ; fi
 if [ $( echo "$ISCP_TARGET_DIR" | grep -c "/$") -eq 0 ]; then ISCP_TARGET_DIR=${ISCP_TARGET_DIR}/ ; fi
@@ -472,17 +478,47 @@ if [ ! -w "$ISCP_TARGET_DIR" ]; then echo "Error: target directory is not writab
 ISCP_SOURCE_SERVER=$(echo "$ISCP_SOURCE" | sed 's/:.*//g')
 ISCP_SOURCE_DIR=$(echo "$ISCP_SOURCE" | sed 's/.*://g')
 
+#setup ISCP_SSH_CONTROL_PATH_OPT if ISCP_SSH_CONTROL_PATH isn't blank
+if [ ! -z "$ISCP_SSH_CONTROL_PATH" ]; then
+ISCP_SSH_CONTROL_PATH_OPT="-S ${ISCP_SSH_CONTROL_PATH}"
+else
+ISCP_SSH_CONTROL_PATH_OPT=""; #no SSH control master will be used by iscp
+fi
+
 #############main begin
 
 #get directory listing from remote server
 echo "Connecting to $ISCP_SOURCE_SERVER on port $ISCP_PORT in ${ISCP_SOURCE_DIR}"
 
+#setup master ssh connection for all other ssh commands to use.
+if [ $ISCP_CREATE_SSH_CONTROL_MASTER -eq 1 ]; then
+	#start ssh control master, it needs to perform a command so it can go to background. The command is an infinite loop
+	ssh -M $ISCP_SSH_CONTROL_PATH_OPT $ISCP_SSH_MASTER_OPT -p $ISCP_PORT -f  "${ISCP_SOURCE_SERVER}" "while true; do sleep 10m; done;" 
+	if [ $? -eq 0 ]; then 
+		echo -n "SSH Control master started..."
+		ssh ${ISCP_SSH_CONTROL_PATH_OPT} -O check ${ISCP_SOURCE_SERVER} #Display information about control server
+		echo "Socket:$(echo $ISCP_SSH_CONTROL_PATH | socket-path-translate)"
+		#setup trap so certain kill signals make sure ssh master gets killed so we don't leave gapping security hole!
+		trap ssh-master-exit 0;
+	else
+		echo "Failed to setup ssh control master." 1>&2; exit 1; 
+	fi
+fi
+
+#perform an additional error check of the SSH_CONTROL_PATH
+if [ ! -z "$ISCP_SSH_CONTROL_PATH" -a ! -S $(echo "$ISCP_SSH_CONTROL_PATH" | socket-path-translate ) ]; then
+echo "SSH control master socket:" $(echo "$ISCP_SSH_CONTROL_PATH" | socket-path-translate) "does not exist!" 1>&2; exit 1;
+fi
 
 #get ls listing & size with single ssh command
 #cycle through elements and create array
 i=0
 j=0
-for fod in $(ssh -p $ISCP_PORT $ISCP_SOURCE_SERVER "ls -F '${ISCP_SOURCE_DIR}' ; echo '##END-LS##'; cd '$ISCP_SOURCE_DIR' ; du --si --max-depth=0 *")
+ISCP_FOD_OUTPUT=$(ssh -p $ISCP_PORT $ISCP_SSH_CONTROL_PATH_OPT $ISCP_SOURCE_SERVER "ls -F '${ISCP_SOURCE_DIR}' ; echo '##END-LS##'; cd '$ISCP_SOURCE_DIR' ; du --si --max-depth=0 *")
+
+#change IFS to allow filenames/directory names with spaces to processed
+IFS=$'\n'
+for fod in $ISCP_FOD_OUTPUT 
 do
 if [ $fod == "##END-LS##" ]; then ISCP_TICK=1; continue;fi
 
@@ -502,7 +538,7 @@ done
 
 
 #check to see we actually found stuff to download
-if [ ${#ISCP_FILE_ARRAY[*]} -eq 0 ]; then echo "Error: Nothing to Download!" 1>&2; kill-ssh-agent ; exit 1; fi
+if [ ${#ISCP_FILE_ARRAY[*]} -eq 0 ]; then echo "Error: Nothing to Download!" 1>&2;  exit 1; fi
 
 
 #show user menu 
@@ -560,7 +596,6 @@ fi
 done
 
 echo "Done..."
+#We assume the trap set earlier will cause function ssh-master-exit to be called
 ###############main end
 
-#kill ssh-agent if it was invoked
-kill-ssh-agent
