@@ -23,7 +23,7 @@ declare -x ISCP_TARGET_DIR=${PWD}/
 declare -ix ISCP_PORT=22
 declare -ix ISCP_RESUME=0
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2j"
+declare -x ISCP_VERSION="0.2k"
 declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
 declare -xi ISCP_QUOTE=0
 declare -xi ISCP_CREATE_SSH_CONTROL_MASTER=1
@@ -49,7 +49,7 @@ function usage() {
 echo "Usage: iscp --help | --iscp-pause | --iscp-unpause | [--bwlimit KBPS] [--config CONFIG_FILE ] [--no-ssh-master | --use-ssh-master SOCKET] [--port PORT] [--quote]  [--resume] [--retry] SOURCE_DIRECTORY TARGET_DIRECTORY
 
 DESCRIPTON
-iscp is an interactive version of scp written in BASH using rsync. When iscp is ran it will perform an ls command and a du (--si option) on the remote system and then present the user with a numbered list of files and directories to download (if available). The user then enters a space seperated list of item number(s) the user wishes to download. iscp will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then iscp will ask the user what to do (download/resume/skip/quit) unless the --resume option is set. 
+iscp is an interactive version of scp written in BASH using rsync. When iscp is ran it will establish a master ssh connection (by default) and then perform an ls command and a du (--si option) on the remote system and then present the user with a numbered list of files and directories to download (if available) to the local system. The user then enters a space seperated list of item number(s) the user wishes to download. iscp will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then iscp will ask the user what to do (download/resume/skip/quit) unless the --resume option is set. 
 
 OPTIONS
 
@@ -393,28 +393,25 @@ done
 for ((i=1; i<=$#; i++))
 do
 
-#check for sourcedir and target dir arguments
-if [ $(($# - 1)) -eq $i -a $(echo ${!i} | cut -c1,2 ) != "--" -a $(echo ${!#} | cut -c1,2) != "--" ]; then ISCP_SOURCE=${!i}; i=$((i+1)); ISCP_TARGET_DIR=${!i}; fi
-
 #check for --resume argument
-if [ ${!i} == "--resume" ]; then ISCP_RESUME=1; fi
+if [ "${!i}" == "--resume" ]; then ISCP_RESUME=1; continue; fi
 
 #check for --help argument
-if [ ${!i} == "--help" ]; then usage; fi 
+if [ "${!i}" == "--help" ]; then usage; fi 
 
 #check for --iscp-pause argument
-if [ ${!i} == "--iscp-pause" ]; then ISCP_RSYNC_SIGNAL="-SIGSTOP"; signal-rsync; exit ; fi
+if [ "${!i}" == "--iscp-pause" ]; then ISCP_RSYNC_SIGNAL="-SIGSTOP"; signal-rsync; exit ; fi
 
 #check for --iscp-unpause argument
-if [ ${!i} == "--iscp-unpause" ]; then ISCP_RSYNC_SIGNAL="-SIGCONT"; signal-rsync; exit ; fi
+if [ "${!i}" == "--iscp-unpause" ]; then ISCP_RSYNC_SIGNAL="-SIGCONT"; signal-rsync; exit ; fi
 
 #check for --no-ssh-master argument
-if [ ${!i} == "--no-ssh-master" ]; then ISCP_CREATE_SSH_CONTROL_MASTER=0; ISCP_SSH_CONTROL_PATH_OPT="";fi
+if [ "${!i}" == "--no-ssh-master" ]; then ISCP_CREATE_SSH_CONTROL_MASTER=0; ISCP_SSH_CONTROL_PATH_OPT=""; continue; fi
 
 #check for --use-ssh-master argument
-if [ ${!i} == "--use-ssh-master" ]; then
+if [ "${!i}" == "--use-ssh-master" ]; then
 	i=$((i +1));
-	ISCP_SSH_CONTROL_PATH=${!i};
+	ISCP_SSH_CONTROL_PATH="${!i}";
 	ISCP_CREATE_SSH_CONTROL_MASTER=0;
 	if [ -S "$ISCP_SSH_CONTROL_PATH" ]; then
 	#socket exists
@@ -423,28 +420,46 @@ if [ ${!i} == "--use-ssh-master" ]; then
 	else
 	echo "Error socket: ${ISCP_SSH_CONTROL_PATH} cannot be accessed" 1>&2; exit 1;
 	fi
+	continue;
 fi  
 
 #check for --port argument
-if [ ${!i} == "--port" ]; then i=$((i + 1)); 
-if [ -z ${!i} ]; then echo "Error: Port number not specified!" 1>&2 ; usage; fi
-if [ $( echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then echo "Error: Port number is invalid!" 1>&2; usage; fi
-ISCP_PORT=${!i}; 
+if [ "${!i}" == "--port" ]; then i=$((i + 1)); 
+	if [ -z "${!i}" ]; then echo "Error: Port number not specified!" 1>&2 ; usage; fi
+	if [ $( echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then echo "Error: Port number is invalid!" 1>&2; usage; fi
+	ISCP_PORT="${!i}";
+	continue; 
 fi
 
 #check for --bwlimit argument
-if [ ${!i} == "--bwlimit" ]; then i=$((i +1));
-if [ $( echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then echo "Error: Bandwidth limit is invalid!" 1>&2; usage; fi
-ISCP_BW_LIMIT="${!i}"
+if [ "${!i}" == "--bwlimit" ]; then i=$((i +1));
+	if [ $( echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then echo "Error: Bandwidth limit is invalid!" 1>&2; usage; fi
+	ISCP_BW_LIMIT="${!i}"
+	continue;
 fi
 
 #check for --quote argument
-if [ ${!i} == "--quote" ]; then ISCP_QUOTE=1; fi
+if [ "${!i}" == "--quote" ]; then ISCP_QUOTE=1; continue; fi
 
 
 #check for retry option
-if [ ${!i} == "--retry" ]; then ISCP_RETRY=1; fi
+if [ "${!i}" == "--retry" ]; then ISCP_RETRY=1; continue; fi
 
+
+#check for sourcedir and target dir arguments
+if [ $(echo "${!i}" | cut -c1,2) != "--" ]; then
+	#we're probably looking at the SOURCE argument
+	ISCP_SOURCE="${!i}";
+	#check format of ISCP_SOURCE is correct (only a rough check)
+	if [ $( echo "$ISCP_SOURCE" | grep -Eci '^([a-z0-9_-]+@)?[0-9a-z.-]+:/[][0-9a-z&!#,)(/ _.'\''-]+$') -ne 1 ]; then echo -e "Error: source directory $ISCP_SOURCE is invalid, format must be [user@]hostname:/path/to/directory" 1>&2; exit; fi
+
+	#try to get TARGET directory
+	i=$((i +1));
+	ISCP_TARGET_DIR="${!i}";
+	#check format of ISCP_TARGET_DIR is correct (only a rough check)
+	if [ $( echo "$ISCP_TARGET_DIR" | grep -Eci '^([][0-9a-z&!@#,)(/ _.'\''-]+)|\.$') -ne 1 ]; then echo -e "Error: target directory $ISCP_TARGET_DIR is invalid, format must be /path/to/directory or relative/path/to/directory" 1>&2; exit; fi
+
+fi
 
 done
 
@@ -462,11 +477,9 @@ if [ $(which rsync | wc -m) -eq 0 ]; then echo "Error: rsync cannot be found in 
 
 
 #append trailing slash to source dir and target dir if necessary
-if [ $( echo "$ISCP_SOURCE" | grep -c "/$") -eq 0 ]; then ISCP_SOURCE=${ISCP_SOURCE}/ ; fi
-if [ $( echo "$ISCP_TARGET_DIR" | grep -c "/$") -eq 0 ]; then ISCP_TARGET_DIR=${ISCP_TARGET_DIR}/ ; fi
+if [ $( echo "$ISCP_SOURCE" | grep -c "/$") -eq 0 ]; then ISCP_SOURCE="${ISCP_SOURCE}/" ; fi
+if [ $( echo "$ISCP_TARGET_DIR" | grep -c "/$") -eq 0 ]; then ISCP_TARGET_DIR="${ISCP_TARGET_DIR}/" ; fi
 
-#check format of ISCP_SOURCE is correct (only a rough check)
-if [ $( echo "$ISCP_SOURCE" | grep -Eci '^([a-z0-9_-]+@)?[0-9a-z.-]+:[0-9a-z/ _.-]+$') -ne 1 ]; then echo "Error: source directory is invalid, format must be [user@]hostname:/path/to/directory" 1>&2; exit; fi
 
 #check target directory exists
 if [ ! -d "$ISCP_TARGET_DIR" ]; then echo "Error: target directory does not exist" 1>&2; exit 1; fi
