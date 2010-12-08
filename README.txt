@@ -5,9 +5,15 @@ iscp is an attempt to make an interactive version of scp with a few useful featu
 INSTALL
 1. You just need to make sure you set execute permission on the script. This can be done using the following command:
 
-chmod u+x iscp-0.2l
+chmod u+x iscp
 
 2. Place the script wherever you want it and rename it to whatever you want. I prefer iscp.
+
+BUGS
+Please note iscp 0.2l and lower that use SSH master connections have a bug due to the way that the connection is setup. Because the '-o ControlPersist=TIME' option wasn't used the master SSH connection was kept open by running an infinite loop (bash -c while true; do sleep 10m; done;). These infinite loops don't seem to be dying very quickly so it is advised you kill them and use the lastest version of iscp which has fixed this issue.
+
+To kill the infinite loops on the remote machine you can run the following command.
+pkill -9 -f 'while true; do sleep 10m; done'
 
 USAGE
 

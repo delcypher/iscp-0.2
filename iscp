@@ -23,12 +23,13 @@ declare -x ISCP_TARGET_DIR=${PWD}/
 declare -ix ISCP_PORT=22
 declare -ix ISCP_RESUME=0
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2l"
+declare -x ISCP_VERSION="0.2m"
 declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
 declare -xi ISCP_QUOTE=0
 declare -xi ISCP_CREATE_SSH_CONTROL_MASTER=1
 declare -x ISCP_SSH_CONTROL_PATH="/tmp/$$.iscp.%h-%p" #Specifies location of control socket file for ssh control master. Blank will cause no SSH control master to be used
 declare -x ISCP_SSH_MASTER_OPT="-o ServerAliveCountMax=5 -o ServerAliveInterval=20" #Options sent to ssh master if we create it
+declare -x ISCP_SSH_MASTER_PERSIST_TIME=600
 
 #declare other variables
 declare -x ISCP_SOURCE_SERVER
@@ -44,6 +45,7 @@ declare -x ISCP_BW_LIMIT_OPT #LEAVE THIS ALONE
 declare -x ISCP_RSYNC_SIGNAL="" #LEAVE THIS ALONE
 declare -x ISCP_SSH_CONTROL_PATH_OPT="" #LEAVE THIS ALONE
 declare -x ISCP_EXECUTABLE_NAME=$(basename $0;) #LEAVE THIS ALONE
+declare -x ISCP_SSH_MASTER_PERSIST_OPT
 
 ###start of functions
 function usage() 
@@ -53,7 +55,7 @@ ${ISCP_EXECUTABLE_NAME} --help
 ${ISCP_EXECUTABLE_NAME} --iscp-pause 
 ${ISCP_EXECUTABLE_NAME} --iscp-unpause 
 ${ISCP_EXECUTABLE_NAME} --config CONFIG_FILE 
-${ISCP_EXECUTABLE_NAME}  [--bwlimit KBPS] [--config CONFIG_FILE ] [--no-ssh-master | --use-ssh-master SOCKET] [--port PORT] [--quote]  [--resume] [--retry] SOURCE_DIRECTORY TARGET_DIRECTORY
+${ISCP_EXECUTABLE_NAME}  [--bwlimit KBPS] [--config CONFIG_FILE ] [--no-ssh-master | --use-ssh-master SOCKET] [--ssh-master-persist-time TIME] [--port PORT] [--quote]  [--resume] [--retry] SOURCE_DIRECTORY TARGET_DIRECTORY
 
 DESCRIPTON
 ${ISCP_EXECUTABLE_NAME} is an interactive version of rsync written in BASH. When ${ISCP_EXECUTABLE_NAME} is ran it will establish a master ssh connection (by default) and then perform an ls command and a du (--si option) on the remote system and then present the user with a numbered list of files and directories to download (if available) to the local system. The user then enters a space seperated list of item number(s) the user wishes to download. ${ISCP_EXECUTABLE_NAME} will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then ${ISCP_EXECUTABLE_NAME} will ask the user what to do (download/resume/skip/quit) unless the --resume option is set. 
@@ -81,6 +83,9 @@ This will prevent a ''master'' mode ssh connection from being made when ${ISCP_E
 --use-ssh-master SOCKET
 Use an already established SSH master connection instead of creating one, where the socket file is SOCKET. This can be established by running ''ssh -M -S SOCKET host''. Note the following wildcards are available %h (remote  host), %r (remote login username) and %p (port).
 
+--ssh-master-persist-time TIME
+Set the persist time (TIME) in seconds for the background SSH master connection. If the master SSH connection is idle for this time then the master connection will be closed. The default is $ISCP_SSH_MASTER_PERSIST_TIME. If this is set to 0 the master SSH connection will left open indefinitely.
+
 --port PORT
 This option allows the user to set the port number to use for ssh connections.
 
@@ -104,6 +109,7 @@ RETRY		- Boolean (0 or 1). Specifies whether to use --retry option
 BW_LIMIT	- Set bandwidth limit in KB/s
 QUOTE		- Boolean (0 or 1). Specifies whether to use --quote option
 CREATE_SSH_CONTROL_MASTER - Boolean (0 or 1). Specifies whether to create a SSH control master (opposite of --no-ssh-master option)
+SSH_MASTER_PERSIST_TIME - Specifies how long the master SSH connection will persist when it is idle in seconds. Use 0 for indefinite.
 SSH_CONTROL_PATH - specifies what the path to the SSH control master socket is (same wildcards available as --use-ssh-master). If CREATE_SSH_CONTROL_MASTER is set to 0 then you can specify an existing socket like the --use-ssh-master option
 
 An example configuration file might read as follows
@@ -590,6 +596,17 @@ for ((i=1; i<=$#; i++)); do
 		continue; 
 	fi
 	
+	#check for --ssh-master-persist-time option
+	if [ "${!i}" == "--ssh-master-persist-time" ]; then
+		i=$((i +1));
+		if [ $(echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then
+			echo "Error: Invalid SSH persist time ${!i}";
+			exit 1;
+		fi
+		
+		ISCP_SSH_MASTER_PERSIST_TIME="${!i}"
+		continue;
+	fi
 	
 	#check for sourcedir and target dir arguments
 	if [ $(echo "${!i}" | cut -c1,2) != "--" ]; then
@@ -665,15 +682,29 @@ else
 	ISCP_SSH_CONTROL_PATH_OPT=""; #no SSH control master will be used by iscp
 fi
 
+
+
 #############Beginning of main program
 #get directory listing from remote server
 echo "Connecting to $ISCP_SOURCE_SERVER on port $ISCP_PORT in ${ISCP_SOURCE_DIR}"
 
 #setup master ssh connection for all other ssh commands to use.
 if [ $ISCP_CREATE_SSH_CONTROL_MASTER -eq 1 ]; then
-	#start ssh control master, it needs to perform a command so it can go to background. The command is an infinite loop
-	ssh -M $ISCP_SSH_CONTROL_PATH_OPT $ISCP_SSH_MASTER_OPT -p $ISCP_PORT -f  "${ISCP_SOURCE_SERVER}" "while true; do sleep 10m; done;" 
-	if [ $? -eq 0 ]; then 
+	#SET SSH master persist time
+	if [ "$ISCP_SSH_MASTER_PERSIST_TIME" -eq 0 ]; then
+		ISCP_SSH_MASTER_PERSIST_OPT="-o ControlPersist=yes"
+		echo "WARNING: SSH Master persist time is indefinte. Make sure the socket $(echo "${ISCP_SSH_CONTROL_PATH}" | socket-path-translate ) is deleted when you're done!";
+	else
+		ISCP_SSH_MASTER_PERSIST_OPT="-o ControlPersist=${ISCP_SSH_MASTER_PERSIST_TIME}"
+		echo "SSH Master persist time: ${ISCP_SSH_MASTER_PERSIST_TIME} seconds";
+	fi
+
+
+	#start ssh control master in persist mode
+	ssh -M $ISCP_SSH_CONTROL_PATH_OPT $ISCP_SSH_MASTER_OPT -p $ISCP_PORT $ISCP_SSH_MASTER_PERSIST_OPT  "${ISCP_SOURCE_SERVER}"
+	
+	#can't use ssh exit code as gives 255 on successful master setup, check for existance of socket instead
+	if [ -S $(echo "${ISCP_SSH_CONTROL_PATH}" | socket-path-translate ) ]; then 
 		echo -n "SSH Control master started..."
 		ssh -p $ISCP_PORT ${ISCP_SSH_CONTROL_PATH_OPT} -O check ${ISCP_SOURCE_SERVER} 
 		#Display information about control server
@@ -681,7 +712,8 @@ if [ $ISCP_CREATE_SSH_CONTROL_MASTER -eq 1 ]; then
 		#setup trap so certain kill signals make sure ssh master gets killed so we don't leave gapping security hole!
 		trap ssh-master-exit 0;
 	else
-		echo "Failed to setup ssh control master." 1>&2; exit 1; 
+		echo "Failed to setup ssh control master." 1>&2; 
+		exit 1; 
 	fi
 fi
 
