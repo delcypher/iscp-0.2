@@ -29,7 +29,7 @@ declare -xi ISCP_QUOTE=0
 declare -xi ISCP_CREATE_SSH_CONTROL_MASTER=1
 declare -x ISCP_SSH_CONTROL_PATH="/tmp/$$.iscp.%h-%p" #Specifies location of control socket file for ssh control master. Blank will cause no SSH control master to be used
 declare -x ISCP_SSH_MASTER_OPT="-o ServerAliveCountMax=5 -o ServerAliveInterval=20" #Options sent to ssh master if we create it
-declare -x ISCP_SSH_MASTER_PERSIST_TIME=600
+declare -ix ISCP_SSH_MASTER_PERSIST_TIME=600
 
 #declare other variables
 declare -x ISCP_SOURCE_SERVER
