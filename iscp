@@ -45,7 +45,7 @@ declare -x ISCP_BW_LIMIT_OPT #LEAVE THIS ALONE
 declare -x ISCP_RSYNC_SIGNAL="" #LEAVE THIS ALONE
 declare -x ISCP_SSH_CONTROL_PATH_OPT="" #LEAVE THIS ALONE
 declare -x ISCP_EXECUTABLE_NAME=$(basename $0;) #LEAVE THIS ALONE
-declare -x ISCP_SSH_MASTER_PERSIST_OPT
+declare -x ISCP_SSH_MASTER_PERSIST_OPT; #LEAVE THIS ALONE
 
 ###start of functions
 function usage() 
