@@ -10,9 +10,9 @@ chmod u+x iscp
 2. Place the script wherever you want it and rename it to whatever you want. I prefer iscp.
 
 BUGS
-Please note iscp 0.2l and lower that use SSH master connections have a bug due to the way that the connection is setup. Because the '-o ControlPersist=TIME' option wasn't used the master SSH connection was kept open by running an infinite loop (bash -c while true; do sleep 10m; done;). These infinite loops don't seem to be dying very quickly so it is advised you kill them and use the lastest version of iscp which has fixed this issue.
+* Please note iscp 0.2l and lower that use SSH master connections have a bug due to the way that the connection is setup. Because the '-o ControlPersist=TIME' option wasn't used the master SSH connection was kept open by running an infinite loop (bash -c while true; do sleep 10m; done;). These infinite loops don't seem to be dying very quickly so it is advised you kill them and use the lastest version of iscp which has fixed this issue.
 
-* Additional bug.
+* Please note iscp 0.2m to 0.2l do not work with openssh-5.7p1-2 correctly. Use iscp 0.2n and above.
 
 
 To kill the infinite loops on the remote machine you can run the following command.

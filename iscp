@@ -23,7 +23,7 @@ declare -x ISCP_TARGET_DIR=${PWD}/
 declare -ix ISCP_PORT=22
 declare -ix ISCP_RESUME=0
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2m"
+declare -x ISCP_VERSION="0.2n"
 declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
 declare -xi ISCP_QUOTE=0
 declare -xi ISCP_CREATE_SSH_CONTROL_MASTER=1
@@ -701,7 +701,7 @@ if [ $ISCP_CREATE_SSH_CONTROL_MASTER -eq 1 ]; then
 
 
 	#start ssh control master in persist mode
-	ssh -M $ISCP_SSH_CONTROL_PATH_OPT $ISCP_SSH_MASTER_OPT -p $ISCP_PORT $ISCP_SSH_MASTER_PERSIST_OPT  "${ISCP_SOURCE_SERVER}"
+	ssh -M $ISCP_SSH_CONTROL_PATH_OPT $ISCP_SSH_MASTER_OPT -f -N -p $ISCP_PORT $ISCP_SSH_MASTER_PERSIST_OPT  "${ISCP_SOURCE_SERVER}"
 	
 	#can't use ssh exit code as gives 255 on successful master setup, check for existance of socket instead
 	if [ -S $(echo "${ISCP_SSH_CONTROL_PATH}" | socket-path-translate ) ]; then 
