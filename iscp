@@ -23,13 +23,12 @@ declare -x ISCP_TARGET_DIR=${PWD}/
 declare -ix ISCP_PORT=22
 declare -ix ISCP_RESUME=0
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2n"
+declare -x ISCP_VERSION="0.2o"
 declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
 declare -xi ISCP_QUOTE=0
 declare -xi ISCP_CREATE_SSH_CONTROL_MASTER=1
 declare -x ISCP_SSH_CONTROL_PATH="/tmp/$$.iscp.%h-%p" #Specifies location of control socket file for ssh control master. Blank will cause no SSH control master to be used
 declare -x ISCP_SSH_MASTER_OPT="-o ServerAliveCountMax=5 -o ServerAliveInterval=20" #Options sent to ssh master if we create it
-declare -ix ISCP_SSH_MASTER_PERSIST_TIME=600
 
 #declare other variables
 declare -x ISCP_SOURCE_SERVER
@@ -45,7 +44,6 @@ declare -x ISCP_BW_LIMIT_OPT #LEAVE THIS ALONE
 declare -x ISCP_RSYNC_SIGNAL="" #LEAVE THIS ALONE
 declare -x ISCP_SSH_CONTROL_PATH_OPT="" #LEAVE THIS ALONE
 declare -x ISCP_EXECUTABLE_NAME=$(basename $0;) #LEAVE THIS ALONE
-declare -x ISCP_SSH_MASTER_PERSIST_OPT; #LEAVE THIS ALONE
 
 ###start of functions
 function usage() 
@@ -82,9 +80,6 @@ This will prevent a ''master'' mode ssh connection from being made when ${ISCP_E
 
 --use-ssh-master SOCKET
 Use an already established SSH master connection instead of creating one, where the socket file is SOCKET. This can be established by running ''ssh -M -S SOCKET host''. Note the following wildcards are available %h (remote  host), %r (remote login username) and %p (port).
-
---ssh-master-persist-time TIME
-Set the persist time (TIME) in seconds for the background SSH master connection. If the master SSH connection is idle for this time then the master connection will be closed. The default is $ISCP_SSH_MASTER_PERSIST_TIME. If this is set to 0 the master SSH connection will left open indefinitely.
 
 --port PORT
 This option allows the user to set the port number to use for ssh connections.
@@ -596,24 +591,12 @@ for ((i=1; i<=$#; i++)); do
 		continue; 
 	fi
 	
-	#check for --ssh-master-persist-time option
-	if [ "${!i}" == "--ssh-master-persist-time" ]; then
-		i=$((i +1));
-		if [ $(echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then
-			echo "Error: Invalid SSH persist time ${!i}";
-			exit 1;
-		fi
-		
-		ISCP_SSH_MASTER_PERSIST_TIME="${!i}"
-		continue;
-	fi
-	
 	#check for sourcedir and target dir arguments
 	if [ $(echo "${!i}" | cut -c1,2) != "--" ]; then
 		#we're probably looking at the SOURCE argument
 		ISCP_SOURCE="${!i}";
 		#check format of ISCP_SOURCE is correct (only a rough check)
-		if [ $( echo "$ISCP_SOURCE" | grep -Eci '^([a-z0-9_-]+@)?[0-9a-z.-]+:/[][0-9a-z&!#,)(/ _.'\''-]+$') -ne 1 ]; then 
+		if [ $( echo "$ISCP_SOURCE" | grep -Eci '^([[:alnum:]_-]+@)?[[:alnum:].-]+:[/]?([][!@~"&()[:alnum:] _#.-]+[/]?)*$' ) -ne 1 ]; then 
 			echo -e "Error: source directory $ISCP_SOURCE is invalid, format must be [user@]hostname:/path/to/directory" 1>&2; exit 1; 
 		fi
 	
@@ -621,7 +604,7 @@ for ((i=1; i<=$#; i++)); do
 		i=$((i +1));
 		ISCP_TARGET_DIR="${!i}";
 		#check format of ISCP_TARGET_DIR is correct (only a rough check)
-		if [ $( echo "$ISCP_TARGET_DIR" | grep -Eci '^([][0-9a-z&!@#,)(/ _.'\''-]+)|\.$') -ne 1 ]; then 
+		if [ $( echo "$ISCP_TARGET_DIR" | grep -Eci '^(/|((\.\./)+)|((\./)+))([][!@~"&()[:alnum:] _#.-]+[/]?)*$') -ne 1 ]; then 
 			echo -e "Error: target directory $ISCP_TARGET_DIR is invalid, format must be /path/to/directory or relative/path/to/directory" 1>&2; 
 			exit; 
 		fi
@@ -690,18 +673,9 @@ echo "Connecting to $ISCP_SOURCE_SERVER on port $ISCP_PORT in ${ISCP_SOURCE_DIR}
 
 #setup master ssh connection for all other ssh commands to use.
 if [ $ISCP_CREATE_SSH_CONTROL_MASTER -eq 1 ]; then
-	#SET SSH master persist time
-	if [ "$ISCP_SSH_MASTER_PERSIST_TIME" -eq 0 ]; then
-		ISCP_SSH_MASTER_PERSIST_OPT="-o ControlPersist=yes"
-		echo "WARNING: SSH Master persist time is indefinte. Make sure the socket $(echo "${ISCP_SSH_CONTROL_PATH}" | socket-path-translate ) is deleted when you're done!";
-	else
-		ISCP_SSH_MASTER_PERSIST_OPT="-o ControlPersist=${ISCP_SSH_MASTER_PERSIST_TIME}"
-		echo "SSH Master persist time: ${ISCP_SSH_MASTER_PERSIST_TIME} seconds";
-	fi
-
 
 	#start ssh control master in persist mode
-	ssh -M $ISCP_SSH_CONTROL_PATH_OPT $ISCP_SSH_MASTER_OPT -f -N -p $ISCP_PORT $ISCP_SSH_MASTER_PERSIST_OPT  "${ISCP_SOURCE_SERVER}"
+	ssh -M $ISCP_SSH_CONTROL_PATH_OPT $ISCP_SSH_MASTER_OPT -f -N -p $ISCP_PORT "${ISCP_SOURCE_SERVER}"
 	
 	#can't use ssh exit code as gives 255 on successful master setup, check for existance of socket instead
 	if [ -S $(echo "${ISCP_SSH_CONTROL_PATH}" | socket-path-translate ) ]; then 
