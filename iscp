@@ -23,7 +23,7 @@ declare -x ISCP_TARGET_DIR=""
 declare -ix ISCP_PORT=22
 declare -ix ISCP_RESUME=0
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2o"
+declare -x ISCP_VERSION="0.2p"
 declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
 declare -xi ISCP_QUOTE=0
 declare -xi ISCP_CREATE_SSH_CONTROL_MASTER=1
@@ -53,7 +53,7 @@ ${ISCP_EXECUTABLE_NAME} --help
 ${ISCP_EXECUTABLE_NAME} --iscp-pause 
 ${ISCP_EXECUTABLE_NAME} --iscp-unpause 
 ${ISCP_EXECUTABLE_NAME} --config CONFIG_FILE 
-${ISCP_EXECUTABLE_NAME}  [--bwlimit KBPS] [--config CONFIG_FILE ] [--no-ssh-master | --use-ssh-master SOCKET] [--ssh-master-persist-time TIME] [--port PORT] [--quote]  [--resume] [--retry] SOURCE_DIRECTORY TARGET_DIRECTORY
+${ISCP_EXECUTABLE_NAME}  [--bwlimit KBPS] [--config CONFIG_FILE ] [--no-ssh-master | --use-ssh-master SOCKET] [--ssh-master-persist-time TIME] [--port PORT] [--quote]  [--resume] [--retry] [SOURCE_DIRECTORY TARGET_DIRECTORY]
 
 DESCRIPTON
 ${ISCP_EXECUTABLE_NAME} is an interactive version of rsync written in BASH. When ${ISCP_EXECUTABLE_NAME} is ran it will establish a master ssh connection (by default) and then perform an ls command and a du (--si option) on the remote system and then present the user with a numbered list of files and directories to download (if available) to the local system. The user then enters a space seperated list of item number(s) the user wishes to download. ${ISCP_EXECUTABLE_NAME} will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then ${ISCP_EXECUTABLE_NAME} will ask the user what to do (download/resume/skip/quit) unless the --resume option is set. 
@@ -598,8 +598,9 @@ for ((i=1; i<=$#; i++)); do
 	fi
 	
 	#check for sourcedir and target dir arguments
-	if [ $(echo "${!i}" | cut -c1,2) != "--" ]; then
-		#we're probably looking at the SOURCE argument
+	if [ $(( $# -1 )) -eq $i ]; then
+
+		#we're looking at source argument
 		ISCP_SOURCE="${!i}";
 		#check format of ISCP_SOURCE is correct (only a rough check)
 		if [ $( echo "$ISCP_SOURCE" | grep -Eci '^([[:alnum:]_-]+@)?[[:alnum:].-]+:[/]?([][!@~"&()[:alnum:] _#.-]+[/]?)*$' ) -ne 1 ]; then 
@@ -614,7 +615,13 @@ for ((i=1; i<=$#; i++)); do
 			echo -e "Error: target directory $ISCP_TARGET_DIR is invalid, format must be /path/to/directory or relative/path/to/directory" 1>&2; 
 			exit; 
 		fi
+
+		break;
 	
+	
+	else
+		echo "Error: The last two arguments should be SOURCE_DIRECTORY TARGET_DIRECTORY" 1>&2
+		exit 1
 	fi
 	
 done
