@@ -1,4 +1,4 @@
-#!/bin/bash 
+#!/bin/bash -x
 #iscp
 # Copyright (C) 2009 Daniel Liew
 #
@@ -19,7 +19,7 @@
 
 #Set Defaults
 declare -x ISCP_SOURCE=""
-declare -x ISCP_TARGET_DIR=${PWD}/
+declare -x ISCP_TARGET_DIR=""
 declare -ix ISCP_PORT=22
 declare -ix ISCP_RESUME=0
 declare -xi ISCP_RETRY=0
