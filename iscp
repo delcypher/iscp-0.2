@@ -604,7 +604,7 @@ for ((i=1; i<=$#; i++)); do
 		i=$((i +1));
 		ISCP_TARGET_DIR="${!i}";
 		#check format of ISCP_TARGET_DIR is correct (only a rough check)
-		if [ $( echo "$ISCP_TARGET_DIR" | grep -Eci '^(/|((\.\./)+)|((\./)+))([][!@~"&()[:alnum:] _#.-]+[/]?)*$') -ne 1 ]; then 
+		if [ $( echo "$ISCP_TARGET_DIR" | grep -Eci '^((/|((\.\./)+)|((\./)+))([][!@~"&()[:alnum:] _#.-]+[/]?)*$)|\.') -ne 1 ]; then 
 			echo -e "Error: target directory $ISCP_TARGET_DIR is invalid, format must be /path/to/directory or relative/path/to/directory" 1>&2; 
 			exit; 
 		fi
