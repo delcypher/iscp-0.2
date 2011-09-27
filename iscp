@@ -592,7 +592,7 @@ for ((i=1; i<=$#; i++)); do
 	fi
 
 	#check for invalid options
-	if [ $(echo "${!i}" | grep -Eci '^--') -eq 1 ]; then
+	if [ $(echo "${!i}" | grep -Eci '^-[-]?') -eq 1 ]; then
 		echo "Error: Option ${!i} is not supported. Use --help to see available options." 1>&2
 		exit 1;
 	fi
