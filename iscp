@@ -260,7 +260,7 @@ function bash-escape()
 #Displays a pausing menu, used to allow an error message to be shown before doing something else
 function pause-ui()
 {
-read -n 1 -s -p 'Press any key to continue...'; echo -e "\n";
+	read -n 1 -s -p 'Press any key to continue...'; echo -e "\n";
 }
 
 function user-menu() 
