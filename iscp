@@ -1,6 +1,7 @@
 #!/bin/bash
 #iscp
 # Copyright (C) 2009 Daniel Liew
+# Copyright (C) 2012 Brendan Le Foll
 #
 # This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -23,12 +24,15 @@ declare -x ISCP_TARGET_DIR=""
 declare -ix ISCP_PORT=22
 declare -ix ISCP_RESUME=0
 declare -xi ISCP_RETRY=0
-declare -x ISCP_VERSION="0.2p"
+declare -x ISCP_VERSION="0.2q"
 declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
 declare -xi ISCP_QUOTE=0
 declare -xi ISCP_CREATE_SSH_CONTROL_MASTER=1
 declare -x ISCP_SSH_CONTROL_PATH="/tmp/$$.iscp.%h-%p" #Specifies location of control socket file for ssh control master. Blank will cause no SSH control master to be used
 declare -x ISCP_SSH_MASTER_OPT="-o ServerAliveCountMax=5 -o ServerAliveInterval=20" #Options sent to ssh master if we create it
+declare -xi ISCP_UNRARALL=0 #Specifies if we run unrarall after every download
+declare -x ISCP_UNRARALL_FLAGS="--quiet --clean" #Specifies unrarall flags to use
+declare -x ISCP_UNRARALL_BCK="&" #Will append string to end of unrarall command, use an ampersand to send unrarall in the background (default)
 
 #declare other variables
 declare -x ISCP_SOURCE_SERVER
@@ -46,17 +50,17 @@ declare -x ISCP_SSH_CONTROL_PATH_OPT="" #LEAVE THIS ALONE
 declare -x ISCP_EXECUTABLE_NAME=$(basename $0;) #LEAVE THIS ALONE
 
 ###start of functions
-function usage() 
+function usage()
 {
-	echo "Usage: 
-${ISCP_EXECUTABLE_NAME} --help 
-${ISCP_EXECUTABLE_NAME} --iscp-pause 
-${ISCP_EXECUTABLE_NAME} --iscp-unpause 
-${ISCP_EXECUTABLE_NAME} --config CONFIG_FILE 
-${ISCP_EXECUTABLE_NAME}  [--bwlimit KBPS] [--config CONFIG_FILE ] [--no-ssh-master | --use-ssh-master SOCKET] [--ssh-master-persist-time TIME] [--port PORT] [--quote]  [--resume] [--retry] [SOURCE_DIRECTORY TARGET_DIRECTORY]
+	echo "Usage:
+${ISCP_EXECUTABLE_NAME} --help
+${ISCP_EXECUTABLE_NAME} --iscp-pause
+${ISCP_EXECUTABLE_NAME} --iscp-unpause
+${ISCP_EXECUTABLE_NAME} --config CONFIG_FILE
+${ISCP_EXECUTABLE_NAME}  [--bwlimit KBPS] [--config CONFIG_FILE ] [--no-ssh-master | --use-ssh-master SOCKET] [--ssh-master-persist-time TIME] [--port PORT] [--unrarall] [--quote]  [--resume] [--retry] [SOURCE_DIRECTORY TARGET_DIRECTORY]
 
 DESCRIPTON
-${ISCP_EXECUTABLE_NAME} is an interactive version of rsync written in BASH. When ${ISCP_EXECUTABLE_NAME} is ran it will establish a master ssh connection (by default) and then perform an ls command and a du (--si option) on the remote system and then present the user with a numbered list of files and directories to download (if available) to the local system. The user then enters a space seperated list of item number(s) the user wishes to download. ${ISCP_EXECUTABLE_NAME} will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then ${ISCP_EXECUTABLE_NAME} will ask the user what to do (download/resume/skip/quit) unless the --resume option is set. 
+${ISCP_EXECUTABLE_NAME} is an interactive version of rsync written in BASH. When ${ISCP_EXECUTABLE_NAME} is ran it will establish a master ssh connection (by default) and then perform an ls command and a du (--si option) on the remote system and then present the user with a numbered list of files and directories to download (if available) to the local system. The user then enters a space seperated list of item number(s) the user wishes to download. ${ISCP_EXECUTABLE_NAME} will then download files/directories in the order specified in the list. If the the file/directory already exists in the target directory then ${ISCP_EXECUTABLE_NAME} will ask the user what to do (download/resume/skip/quit) unless the --resume option is set.
 
 OPTIONS
 
@@ -73,13 +77,16 @@ This will present the user with a list of currently running ${ISCP_EXECUTABLE_NA
 Sets a bandwidth in KB/s when downloading files. No limit is applied to the downloading of the file list.
 
 --config CONFIG_FILE
-This option allows you to load a configuration file in which you can set various ${ISCP_EXECUTABLE_NAME} parameters. Any options specified on the command line will overide settings in the configuration file. Details of possible parameters are described in the CONFIGURATION FILE section. 
+This option allows you to load a configuration file in which you can set various ${ISCP_EXECUTABLE_NAME} parameters. Any options specified on the command line will overide settings in the configuration file. Details of possible parameters are described in the CONFIGURATION FILE section.
 
 --no-ssh-master
 This will prevent a ''master'' mode ssh connection from being made when ${ISCP_EXECUTABLE_NAME} starts. This means that all subsequent ssh connections made will be independent from each other and will thus will each request a password unless a different form of automatic authentification is setup like public-key authentication.
 
 --use-ssh-master SOCKET
 Use an already established SSH master connection instead of creating one, where the socket file is SOCKET. This can be established by running ''ssh -M -S SOCKET host''. Note the following wildcards are available %h (remote  host), %r (remote login username) and %p (port).
+
+--unrarall
+Run unrarall on all downloads and attempt to clean up .rar and split rar files automatically. Requires unrarall from github.com/arfoll/unrarall. Use ISCP_UNRARALL_BCK and ISCP_UNRARALL_FLAGS to modify the behaviour of the script.
 
 --port PORT
 This option allows the user to set the port number to use for ssh connections.
@@ -141,45 +148,45 @@ exit 1
 
 
 #Close the ssh master connection if it should of been opened
-function ssh-master-exit() 
+function ssh-master-exit()
 {
 	if [  $ISCP_CREATE_SSH_CONTROL_MASTER -eq 1 ]; then
 		#try to close the ssh control master
 		unset IFS; #make sure we are using normal IFS so options to ssh are parsed correctly
 		echo -ne "\nStoping SSH control master..."
 		ssh -p $ISCP_PORT ${ISCP_SSH_CONTROL_PATH_OPT} -O exit ${ISCP_SOURCE_SERVER}
-		if [ $? -eq 0 ]; then 
-			echo "Success"; 
-		else 
-			echo "Failure!"; 
+		if [ $? -eq 0 ]; then
+			echo "Success";
+		else
+			echo "Failure!";
 		fi
 	fi
 }
 
 #returns the socket path with %h substituted for the current host and %p for the current port - data passed on standard input
-function socket-path-translate() 
+function socket-path-translate()
 {
 	while read input ; do
 		#extract username
-		USERNAME=$(echo "$ISCP_SOURCE_SERVER" | sed 's/\(.\+\)@.\+/\1/' ) 
+		USERNAME=$(echo "$ISCP_SOURCE_SERVER" | sed 's/\(.\+\)@.\+/\1/' )
 		#if there is no username in ISCP_SOURCE_SERVER assume current username
-		if [ -z $USERNAME ]; then 
-			USERNAME=$(whoami); 
-		fi 	
+		if [ -z $USERNAME ]; then
+			USERNAME=$(whoami);
+		fi
 		echo "$input" | sed 's/%h/'${ISCP_SOURCE_SERVER#*@}'/' | sed 's/%p/'${ISCP_PORT}'/' | sed 's/%r/'$USERNAME'/'
 	done;
 }
 
-function signal-rsync() 
+function signal-rsync()
 {
 	#check at least 1 copy of iscp is running # fix not show currently running
 	ISCP_CURRENT_PID=$$
 	ISCP_CURRENT_PROCESSES=$(pgrep -x "$ISCP_EXECUTABLE_NAME")
-	if [ $( echo -n "$ISCP_CURRENT_PROCESSES" | grep -v $ISCP_CURRENT_PID | wc -l ) -eq 0 ]; then 
+	if [ $( echo -n "$ISCP_CURRENT_PROCESSES" | grep -v $ISCP_CURRENT_PID | wc -l ) -eq 0 ]; then
 		echo "Error: No Running instances of $ISCP_EXECUTABLE_NAME" 1>&2
 		exit 1
 	fi
-	
+
 	i=0
 	for pid in $( pgrep -P $( pgrep -d',' -P $(pgrep -d',' "^${ISCP_EXECUTABLE_NAME}"\$)) -x rsync )
 	do
@@ -192,63 +199,63 @@ function signal-rsync()
 		echo "$ISCP_EXECUTABLE_NAME appears to be running but there are no running transfers";
 		exit 1;
 	fi
-	
+
 	#display list with downloading item
 	echo "Currently running $ISCP_EXECUTABLE_NAME transfers:"
 	for ((i=0; i<= ${#ISCP_R_PID_LIST[*]} -1; i++)); do
 		#display array item number and remote location
 		echo "[$i] " $( ps --no-headers -o cmd -p ${ISCP_R_PID_LIST[i]} | sed 's/^.\+ --\([a-z]\+\) //g' | sed 's/\([^\]\) .\+$/\1/g')
 	done;
-	
+
 	#prompt user for process to send SIGSTOP/SIGCONT to
-	if [ "$ISCP_RSYNC_SIGNAL" == "-SIGSTOP" ]; then 
+	if [ "$ISCP_RSYNC_SIGNAL" == "-SIGSTOP" ]; then
 		echo -n "Enter Process number(s) (space seperator) to pause or q (quit)?";
-	elif [ "$ISCP_RSYNC_SIGNAL" == "-SIGCONT" ]; then 
-		echo -n "Enter Process number(s) (space seperator) to unpause or q (quit)?"; 
-	else 
-		echo "ERROR: VARIABLE ISCP_RSYNC_SIGNAL DOES NOT SPECIFY VALID SIGNAL!" 2>&1 ; exit 1; 
+	elif [ "$ISCP_RSYNC_SIGNAL" == "-SIGCONT" ]; then
+		echo -n "Enter Process number(s) (space seperator) to unpause or q (quit)?";
+	else
+		echo "ERROR: VARIABLE ISCP_RSYNC_SIGNAL DOES NOT SPECIFY VALID SIGNAL!" 2>&1 ; exit 1;
 	fi
-	
+
 	read -a ISCP_PROCESS_CHOICE
-	if [ ${#ISCP_PROCESS_CHOICE[*]} -eq 0 ]; then 
-		echo "Error: No process number(s) specified" 1>&2 ; signal-rsync; 
+	if [ ${#ISCP_PROCESS_CHOICE[*]} -eq 0 ]; then
+		echo "Error: No process number(s) specified" 1>&2 ; signal-rsync;
 	fi
-	if [ ${ISCP_PROCESS_CHOICE[0]} == "q" ]; then 
-		echo "Quitting..." 1>&2; exit 0; 
+	if [ ${ISCP_PROCESS_CHOICE[0]} == "q" ]; then
+		echo "Quitting..." 1>&2; exit 0;
 	fi
-	
+
 	#parse users input (make sure each element of ISCP_PROCESS_CHOICE IS a number and isn't larger than ${#IFS_FILE_ARRAY[*]} -1
 	for ((i=0; i<= ${#ISCP_PROCESS_CHOICE[*]} -1; i++))
 	do
-		if [ $( echo "${ISCP_PROCESS_CHOICE[i]}" | grep -cE '^[0-9]+$' ) -ne 1 ]; then 
-			echo "Error: ${ISCP_PROCESS_CHOICE[i]} is not a valid number" 1>&2 ; signal-rsync; break; 
+		if [ $( echo "${ISCP_PROCESS_CHOICE[i]}" | grep -cE '^[0-9]+$' ) -ne 1 ]; then
+			echo "Error: ${ISCP_PROCESS_CHOICE[i]} is not a valid number" 1>&2 ; signal-rsync; break;
 		fi
-		if [ ${ISCP_PROCESS_CHOICE[i]} -gt $(( ${#ISCP_R_PID_LIST[*]} - 1)) ]; then 
-			echo "Error: ${ISCP_PROCESS_CHOICE[i]} is not in the running process list" 1>&2; signal-rsync; break; 
+		if [ ${ISCP_PROCESS_CHOICE[i]} -gt $(( ${#ISCP_R_PID_LIST[*]} - 1)) ]; then
+			echo "Error: ${ISCP_PROCESS_CHOICE[i]} is not in the running process list" 1>&2; signal-rsync; break;
 		fi
 	done
-	
+
 	#cycle through user's choices
 	for ((i=0; i<=${#ISCP_PROCESS_CHOICE[*]} -1; i++))
 	do
 		ISCP_TEMP_NO=${ISCP_PROCESS_CHOICE[i]}
-		if [ "$ISCP_RSYNC_SIGNAL" == "-SIGSTOP" ]; then 
+		if [ "$ISCP_RSYNC_SIGNAL" == "-SIGSTOP" ]; then
 			echo -n "Sending signal -SIGSTOP to PID:" ${ISCP_R_PID_LIST[ISCP_TEMP_NO]} "..." ;
 		fi
-		if [ "$ISCP_RSYNC_SIGNAL" == "-SIGCONT" ]; then 
+		if [ "$ISCP_RSYNC_SIGNAL" == "-SIGCONT" ]; then
 			echo -n "Sending signal -SIGCONT to PID:" ${ISCP_R_PID_LIST[ISCP_TEMP_NO]} "..." ;
 		fi
-	
+
 		kill $ISCP_RSYNC_SIGNAL ${ISCP_R_PID_LIST[ISCP_TEMP_NO]} 2> /dev/null
-		if [ $? -eq 0 ]; then 
-			echo "Success"; 
-		else 
-			echo "Failure!"; 
+		if [ $? -eq 0 ]; then
+			echo "Success";
+		else
+			echo "Failure!";
 		fi
 	done
 }
 
-function bash-escape() 
+function bash-escape()
 {
 	# function to read from standard input and append slash to the following shell characters
 	# [ ] ( ) & ' whitespace and other shell characters
@@ -263,48 +270,48 @@ function pause-ui()
 	read -n 1 -s -p 'Press any key to continue...'; echo -e "\n";
 }
 
-function user-menu() 
+function user-menu()
 {
 	#create options array with file/directory sizes
-	( 
-	for ((i=0; i<= ${#ISCP_FILE_ARRAY[*]} -1; i++)); do 
-		echo "[${i}] (${ISCP_FILE_SIZE_ARRAY[i]}) ${ISCP_FILE_ARRAY[i]}"; 
-	done; 
+	(
+	for ((i=0; i<= ${#ISCP_FILE_ARRAY[*]} -1; i++)); do
+		echo "[${i}] (${ISCP_FILE_SIZE_ARRAY[i]}) ${ISCP_FILE_ARRAY[i]}";
+	done;
 	) | more
-	
+
 	#temporary makes space IFS
 	IFS=$' \t\n'
 	echo -n "Enter file number(s) (space seperator) or q:"
 	read -a ISCP_USER_CHOICE
-	if [ ${#ISCP_USER_CHOICE[*]} -eq 0 ]; then 
+	if [ ${#ISCP_USER_CHOICE[*]} -eq 0 ]; then
 		echo "Error: No files specified, type q to quit." 1>&2 ; pause-ui; user-menu;
 	fi
-	if [ ${ISCP_USER_CHOICE[0]} == "q" ]; then 
-		echo "Quitting..." 1>&2;  exit 0; 
+	if [ ${ISCP_USER_CHOICE[0]} == "q" ]; then
+		echo "Quitting..." 1>&2;  exit 0;
 	fi
 	#set IFS back
 	IFS=$'\n'
-	
+
 	#parse users input (make sure each element of ISCP_USER_CHOICE IS a number and isn't larger than ${#IFS_FILE_ARRAY[*]} -1
 	for ((i=0; i<= ${#ISCP_USER_CHOICE[*]} -1; i++))
 	do
-		if [ $( echo "${ISCP_USER_CHOICE[i]}" | grep -cE '^[0-9]+$' ) -ne 1 ]; then 
-			echo "Error: ${ISCP_USER_CHOICE[i]} is not a valid number" 1>&2 ; pause-ui; user-menu; break; 
+		if [ $( echo "${ISCP_USER_CHOICE[i]}" | grep -cE '^[0-9]+$' ) -ne 1 ]; then
+			echo "Error: ${ISCP_USER_CHOICE[i]} is not a valid number" 1>&2 ; pause-ui; user-menu; break;
 		fi
-		if [ ${ISCP_USER_CHOICE[i]} -gt $(( ${#ISCP_FILE_ARRAY[*]} - 1)) ]; then 
-			echo "Error: ${ISCP_USER_CHOICE[i]} is not in the file/directory list" 1>&2; pause-ui; user-menu; break; 
+		if [ ${ISCP_USER_CHOICE[i]} -gt $(( ${#ISCP_FILE_ARRAY[*]} - 1)) ]; then
+			echo "Error: ${ISCP_USER_CHOICE[i]} is not in the file/directory list" 1>&2; pause-ui; user-menu; break;
 		fi
 	done
-	
+
 }
 
-function drq-dir-prompt() 
+function drq-dir-prompt()
 {
 	echo "Download directory: ${ISCP_FILE_ARRAY[file_no]}"
 	echo  -n "Download(d)/Resume(r)/skip(s)/quit(q)?"
 	read -n1 answer
-	if [ -z $answer ]; then 
-		echo -e "\nPlease choose an option." 1>&2; drq-dir-prompt; 
+	if [ -z $answer ]; then
+		echo -e "\nPlease choose an option." 1>&2; drq-dir-prompt;
 	fi
 	case "$answer" in
 		d|D)
@@ -323,16 +330,15 @@ function drq-dir-prompt()
 			echo -e "\nPlease choose a valid option" 1>&2; drq-dir-prompt;
 		;;
 	esac
-	
 }
 
-function drq-file-prompt() 
+function drq-file-prompt()
 {
 	echo "Download file: ${ISCP_FILE_ARRAY[file_no]}"
 	echo  -n "Download(d)/Resume(r)/skip(s)/quit(q)?"
 	read -n1 answer
-	if [ -z $answer ]; then 
-		echo -e "\nPlease choose an option." 1>&2; drq-file-prompt; 
+	if [ -z $answer ]; then
+		echo -e "\nPlease choose an option." 1>&2; drq-file-prompt;
 	fi
 	case "$answer" in
 		d|D)
@@ -351,74 +357,72 @@ function drq-file-prompt()
 			echo -e "\nPlease choose a valid option" 1>&2; drq-file-prompt;
 		;;
 	esac
-	
 }
 
 
-function fresh-dir() 
+function fresh-dir()
 {
 	echo -e "\nFresh directory download: ${ISCP_FILE_ARRAY[file_no]}"
-	
+
 	#if old dir exists then remove it
-	if [ -d "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ]; then 
-		echo -n "removing existing directory..."; 
-		rm -r  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ; 
-		echo "starting download..."; 
+	if [ -d "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ]; then
+		echo -n "removing existing directory...";
+		rm -r  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ;
+		echo "starting download...";
 	fi
-	
+
 	if [ -z $ISCP_QUOTE_OPT ]; then
 		#fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
 		ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | bash-escape )
 	else
 		ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 	fi
-	
-	
-	if [ ! -z $ISCP_BW_LIMIT_OPT ]; then 
-		echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; 
+
+	if [ ! -z $ISCP_BW_LIMIT_OPT ]; then
+		echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s";
 	fi
 	rsync --rsh="ssh -p $ISCP_PORT $ISCP_SSH_CONTROL_PATH_OPT" $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --recursive --partial "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
 
 	# if rsync fails and user specified --retry retry rsync command indefinitely #FIXED if failed do resume-dir
-	if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then 
-		echo "Directory Transfer failure...retrying" 1>&2; 
-		resume-dir; 
+	if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then
+		echo "Directory Transfer failure...retrying" 1>&2;
+		resume-dir;
 	fi
 }
 
-function resume-dir() 
+function resume-dir()
 {
 	echo -e "\nResume directory download: ${ISCP_FILE_ARRAY[file_no]}"
-	
+
 	if [ -z $ISCP_QUOTE_OPT ]; then
 		#fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
 		ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | bash-escape )
 	else
 		ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 	fi
-	
-	if [ ! -z $ISCP_BW_LIMIT_OPT ]; then 
-		echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; 
+
+	if [ ! -z $ISCP_BW_LIMIT_OPT ]; then
+		echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s";
 	fi
 
 	rsync --rsh="ssh -p $ISCP_PORT $ISCP_SSH_CONTROL_PATH_OPT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --partial --recursive "$ISCP_ESC_SOURCE"  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}"
 
 	# if rsync fails and user specified --retry retry rsync command indefinitely
-	if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then 
-		echo "Directory Transfer failure...retrying" 1>&2; 
-		resume-dir; 
+	if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then
+		echo "Directory Transfer failure...retrying" 1>&2;
+		resume-dir;
 	fi
 }
 
-function fresh-file() 
+function fresh-file()
 {
 		echo -e "\nFresh file download: ${ISCP_FILE_ARRAY[file_no]}"
 
 	#if old file exists then remove it
-	if [ -f "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ]; then 
-		echo -n "removing existing file..."; 
-		rm  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ; 
-		echo "starting download..."; 
+	if [ -f "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ]; then
+		echo -n "removing existing file...";
+		rm  "${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}" ;
+		echo "starting download...";
 	fi
 
 	if [ -z $ISCP_QUOTE_OPT ]; then
@@ -428,41 +432,40 @@ function fresh-file()
 		ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 	fi
 
-	if [ ! -z $ISCP_BW_LIMIT_OPT ]; then 
-		echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; 
+	if [ ! -z $ISCP_BW_LIMIT_OPT ]; then
+		echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s";
 	fi
 
 	rsync --rsh="ssh -p $ISCP_PORT $ISCP_SSH_CONTROL_PATH_OPT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --partial --copy-links --recursive "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
 
 	# if rsync fails and user specified --retry retry rsync command indefinitely #FIXED if failed do resume-fil
-	if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then 
-		echo "File Transfer failure...retrying" 1>&2; 
-		resume-file; 
+	if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then
+		echo "File Transfer failure...retrying" 1>&2;
+		resume-file;
 	fi
 }
 
-function resume-file() 
+function resume-file()
 {
 	echo -e "\nResume file download: ${ISCP_FILE_ARRAY[file_no]}"
-	
+
 	if [ -z $ISCP_QUOTE_OPT ]; then
 		#fix file/directory names with spaces and () by escaping them, we could avoid this by using rsync -s option, but remote server may not have option
 		ISCP_ESC_SOURCE=$( echo "${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}" | bash-escape )
 	else
 		ISCP_ESC_SOURCE="${ISCP_SOURCE}${ISCP_FILE_ARRAY[file_no]}"
 	fi
-	
-	
-	if [ ! -z $ISCP_BW_LIMIT_OPT ]; then 
-		echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s"; 
+
+	if [ ! -z $ISCP_BW_LIMIT_OPT ]; then
+		echo "Bandwidth limit:$(echo "$ISCP_BW_LIMIT")KB/s";
 	fi
 
 	rsync --rsh="ssh -p $ISCP_PORT $ISCP_SSH_CONTROL_PATH_OPT"  $ISCP_BW_LIMIT_OPT $ISCP_QUOTE_OPT --port $ISCP_PORT --progress --human-readable --partial  --copy-links --recursive "$ISCP_ESC_SOURCE" "${ISCP_TARGET_DIR}"
 
 	# if rsync fails and user specified --retry retry rsync command indefinitely
-	if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then 
-		echo "File Transfer failure...retrying" 1>&2; 
-		resume-file; 
+	if [ $ISCP_RETRY -eq 1 -a $? -ne 0 ]; then
+		echo "File Transfer failure...retrying" 1>&2;
+		resume-file;
 	fi
 }
 ###end of functions
@@ -471,7 +474,6 @@ function resume-file()
 
 #check for a config file option and load its options (we do this before processing other command line arguments so they can overwrite config file)
 for ((i=1; i<=$#; i++)); do
-	
 	#check for --config argument
 	if [ "${!i}" == "--config" ]; then
 		i=$((i+1))
@@ -488,56 +490,60 @@ for ((i=1; i<=$#; i++)); do
 				fi
 			done <<< "$(cat ${!i})"
 
-		else 
-			echo "Error: configuration file ${!i} is not readable!" 1>&2; 
-			exit 1; 
+		else
+			echo "Error: configuration file ${!i} is not readable!" 1>&2;
+			exit 1;
 		fi
 	fi
 
 done
 
-
 #cycle through commandline arguments
 for ((i=1; i<=$#; i++)); do
-	
 	#check for --config argument (allows us to issue --config CONFIGURATION_FILE as only arguments)
 	if [ "${!i}" == "--config" ]; then
 		i=$((i +1));
 		continue;
 	fi
-	
+
 	#check for --resume argument
-	if [ "${!i}" == "--resume" ]; then 
-		ISCP_RESUME=1; 
-		continue; 
+	if [ "${!i}" == "--resume" ]; then
+		ISCP_RESUME=1;
+		continue;
 	fi
-	
+
 	#check for --help argument
-	if [ "${!i}" == "--help" ]; then 
-		usage; 
-	fi 
-	
+	if [ "${!i}" == "--help" ]; then
+		usage;
+	fi
+
 	#check for --iscp-pause argument
-	if [ "${!i}" == "--iscp-pause" ]; then 
-		ISCP_RSYNC_SIGNAL="-SIGSTOP"; 
-		signal-rsync; 
-		exit 0; 
+	if [ "${!i}" == "--iscp-pause" ]; then
+		ISCP_RSYNC_SIGNAL="-SIGSTOP";
+		signal-rsync;
+		exit 0;
 	fi
-	
+
 	#check for --iscp-unpause argument
-	if [ "${!i}" == "--iscp-unpause" ]; then 
-		ISCP_RSYNC_SIGNAL="-SIGCONT"; 
-		signal-rsync; 
-		exit 0; 
+	if [ "${!i}" == "--iscp-unpause" ]; then
+		ISCP_RSYNC_SIGNAL="-SIGCONT";
+		signal-rsync;
+		exit 0;
 	fi
-	
+
 	#check for --no-ssh-master argument
-	if [ "${!i}" == "--no-ssh-master" ]; then 
+	if [ "${!i}" == "--no-ssh-master" ]; then
 		ISCP_CREATE_SSH_CONTROL_MASTER=0;
 		ISCP_SSH_CONTROL_PATH_OPT="";
-		continue; 
+		continue;
 	fi
-	
+
+	#check for --unrarall
+        if [ "${!i}" == "--unrarall" ]; then
+                ISCP_UNRARALL=1;
+                continue;
+        fi
+
 	#check for --use-ssh-master argument
 	if [ "${!i}" == "--use-ssh-master" ]; then
 		i=$((i +1));
@@ -551,44 +557,43 @@ for ((i=1; i<=$#; i++)); do
 			echo "Error socket: ${ISCP_SSH_CONTROL_PATH} cannot be accessed" 1>&2; exit 1;
 		fi
 		continue;
-	fi  
-	
+	fi
+
 	#check for --port argument
-	if [ "${!i}" == "--port" ]; then 
-		i=$((i + 1)); 
-		if [ -z "${!i}" ]; then 
-			echo "Error: Port number not specified!" 1>&2 ; 
+	if [ "${!i}" == "--port" ]; then
+		i=$((i + 1));
+		if [ -z "${!i}" ]; then
+			echo "Error: Port number not specified!" 1>&2 ;
 			exit 1;
 		fi
-		if [ $( echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then 
-			echo "Error: Port number is invalid!" 1>&2; 
+		if [ $( echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then
+			echo "Error: Port number is invalid!" 1>&2;
 			exit 1;
 		fi
 		ISCP_PORT="${!i}";
-		continue; 
+		continue;
 	fi
-	
+
 	#check for --bwlimit argument
 	if [ "${!i}" == "--bwlimit" ]; then i=$((i +1));
-		if [ $( echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then 
-			echo "Error: Bandwidth limit is invalid!" 1>&2; 
+		if [ $( echo "${!i}" | grep -Ec '^[0-9]+$') -ne 1 ]; then
+			echo "Error: Bandwidth limit is invalid!" 1>&2;
 			exit 1;
 		fi
 		ISCP_BW_LIMIT="${!i}"
 		continue;
 	fi
-	
+
 	#check for --quote argument
-	if [ "${!i}" == "--quote" ]; then 
-		ISCP_QUOTE=1; 
-		continue; 
+	if [ "${!i}" == "--quote" ]; then
+		ISCP_QUOTE=1;
+		continue;
 	fi
-	
-	
+
 	#check for retry option
-	if [ "${!i}" == "--retry" ]; then 
-		ISCP_RETRY=1; 
-		continue; 
+	if [ "${!i}" == "--retry" ]; then
+		ISCP_RETRY=1;
+		continue;
 	fi
 
 	#check for invalid options
@@ -596,46 +601,44 @@ for ((i=1; i<=$#; i++)); do
 		echo "Error: Option ${!i} is not supported. Use --help to see available options." 1>&2
 		exit 1;
 	fi
-	
+
 	#check for sourcedir and target dir arguments
 	if [ $(( $# -1 )) -eq $i ]; then
 
 		#we're looking at source argument
 		ISCP_SOURCE="${!i}";
 		#check format of ISCP_SOURCE is correct (only a rough check)
-		if [ $( echo "$ISCP_SOURCE" | grep -Eci '^([[:alnum:]_-]+@)?[[:alnum:].-]+:[/]?([][!@~"&()[:alnum:] _#.-]+[/]?)*$' ) -ne 1 ]; then 
-			echo -e "Error: source directory $ISCP_SOURCE is invalid, format must be [user@]hostname:/path/to/directory" 1>&2; exit 1; 
+		if [ $( echo "$ISCP_SOURCE" | grep -Eci '^([[:alnum:]_-]+@)?[[:alnum:].-]+:[/]?([][!@~"&()[:alnum:] _#.-]+[/]?)*$' ) -ne 1 ]; then
+			echo -e "Error: source directory $ISCP_SOURCE is invalid, format must be [user@]hostname:/path/to/directory" 1>&2; exit 1;
 		fi
-	
+
 		#try to get TARGET directory
 		i=$((i +1));
 		ISCP_TARGET_DIR="${!i}";
 		#check format of ISCP_TARGET_DIR is correct (only a rough check)
-		if [ $( echo "$ISCP_TARGET_DIR" | grep -Eci '^((/|((\.\./)+)|((\./)+))([][!@~"&()[:alnum:] _#.-]+[/]?)*$)|\.') -ne 1 ]; then 
-			echo -e "Error: target directory $ISCP_TARGET_DIR is invalid, format must be /path/to/directory or relative/path/to/directory" 1>&2; 
-			exit; 
+		if [ $( echo "$ISCP_TARGET_DIR" | grep -Eci '^((/|((\.\./)+)|((\./)+))([][!@~"&()[:alnum:] _#.-]+[/]?)*$)|\.') -ne 1 ]; then
+			echo -e "Error: target directory $ISCP_TARGET_DIR is invalid, format must be /path/to/directory or relative/path/to/directory" 1>&2;
+			exit;
 		fi
 
 		break;
-	
-	
+
 	else
 		echo "Error: The last two arguments should be SOURCE_DIRECTORY TARGET_DIRECTORY" 1>&2
 		exit 1
 	fi
-	
 done
 
 #set bandwidth limit option if necessary
-if [ ! -z "$ISCP_BW_LIMIT" ]; then 
-	ISCP_BW_LIMIT_OPT="--bwlimit=${ISCP_BW_LIMIT}"; 
-else 
-	ISCP_BW_LIMIT_OPT=""; 
+if [ ! -z "$ISCP_BW_LIMIT" ]; then
+	ISCP_BW_LIMIT_OPT="--bwlimit=${ISCP_BW_LIMIT}";
+else
+	ISCP_BW_LIMIT_OPT="";
 fi
 
 #set ISCP_QUOTE_OPT if necessary
-if [ $ISCP_QUOTE -eq 1 ]; then 
-	ISCP_QUOTE_OPT="--protect-args"; 
+if [ $ISCP_QUOTE -eq 1 ]; then
+	ISCP_QUOTE_OPT="--protect-args";
 fi
 
 #command line parameter parsing finished
@@ -646,24 +649,24 @@ if [ $(which rsync | wc -m) -eq 0 ]; then echo "Error: rsync cannot be found in 
 
 
 #append trailing slash to source dir and target dir if necessary
-if [ $( echo "$ISCP_SOURCE" | grep -c "/$") -eq 0 ]; then 
-	ISCP_SOURCE="${ISCP_SOURCE}/" ; 
+if [ $( echo "$ISCP_SOURCE" | grep -c "/$") -eq 0 ]; then
+	ISCP_SOURCE="${ISCP_SOURCE}/" ;
 fi
-if [ $( echo "$ISCP_TARGET_DIR" | grep -c "/$") -eq 0 ]; then 
+if [ $( echo "$ISCP_TARGET_DIR" | grep -c "/$") -eq 0 ]; then
 	ISCP_TARGET_DIR="${ISCP_TARGET_DIR}/" ;
 fi
 
 
 #check target directory exists
-if [ ! -d "$ISCP_TARGET_DIR" ]; then 
-	echo "Error: target directory does not exist" 1>&2; 
-	exit 1; 
+if [ ! -d "$ISCP_TARGET_DIR" ]; then
+	echo "Error: target directory does not exist" 1>&2;
+	exit 1;
 fi
 
 #check target directory is writable
-if [ ! -w "$ISCP_TARGET_DIR" ]; then 
-	echo "Error: target directory is not writable" 1>&2; 
-	exit 1; 
+if [ ! -w "$ISCP_TARGET_DIR" ]; then
+	echo "Error: target directory is not writable" 1>&2;
+	exit 1;
 fi
 
 
@@ -678,8 +681,6 @@ else
 	ISCP_SSH_CONTROL_PATH_OPT=""; #no SSH control master will be used by iscp
 fi
 
-
-
 #############Beginning of main program
 #get directory listing from remote server
 echo "Connecting to $ISCP_SOURCE_SERVER on port $ISCP_PORT in ${ISCP_SOURCE_DIR}"
@@ -689,24 +690,24 @@ if [ $ISCP_CREATE_SSH_CONTROL_MASTER -eq 1 ]; then
 
 	#start ssh control master in persist mode
 	ssh -M $ISCP_SSH_CONTROL_PATH_OPT $ISCP_SSH_MASTER_OPT -f -N -p $ISCP_PORT "${ISCP_SOURCE_SERVER}"
-	
+
 	#can't use ssh exit code as gives 255 on successful master setup, check for existance of socket instead
-	if [ -S $(echo "${ISCP_SSH_CONTROL_PATH}" | socket-path-translate ) ]; then 
+	if [ -S $(echo "${ISCP_SSH_CONTROL_PATH}" | socket-path-translate ) ]; then
 		echo -n "SSH Control master started..."
-		ssh -p $ISCP_PORT ${ISCP_SSH_CONTROL_PATH_OPT} -O check ${ISCP_SOURCE_SERVER} 
+		ssh -p $ISCP_PORT ${ISCP_SSH_CONTROL_PATH_OPT} -O check ${ISCP_SOURCE_SERVER}
 		#Display information about control server
 		echo "Socket:$(echo $ISCP_SSH_CONTROL_PATH | socket-path-translate)"
 		#setup trap so certain kill signals make sure ssh master gets killed so we don't leave gapping security hole!
 		trap ssh-master-exit 0;
 	else
-		echo "Failed to setup ssh control master." 1>&2; 
-		exit 1; 
+		echo "Failed to setup ssh control master." 1>&2;
+		exit 1;
 	fi
 fi
 
 #perform an additional error check of the SSH_CONTROL_PATH (needed if user specifies their own ssh master connection)
 if [ ! -z "$ISCP_SSH_CONTROL_PATH" -a ! -S $(echo "$ISCP_SSH_CONTROL_PATH" | socket-path-translate ) ]; then
-	echo "SSH control master socket:" $(echo "$ISCP_SSH_CONTROL_PATH" | socket-path-translate) "does not exist!" 1>&2; 
+	echo "SSH control master socket:" $(echo "$ISCP_SSH_CONTROL_PATH" | socket-path-translate) "does not exist!" 1>&2;
 	exit 1;
 fi
 
@@ -717,7 +718,7 @@ j=0
 ISCP_FOD_OUTPUT=$(ssh -p $ISCP_PORT $ISCP_SSH_CONTROL_PATH_OPT $ISCP_SOURCE_SERVER "ls -F '${ISCP_SOURCE_DIR}'  ; echo '##END-LS##'; cd '$ISCP_SOURCE_DIR' ; du --si --max-depth=0 *")
 
 #disable shell globbing so * character does not get interpreted
-set -f 
+set -f
 #change IFS to allow filenames/directory names with spaces to processed
 IFS=$'\n'
 for fod in $ISCP_FOD_OUTPUT
@@ -742,13 +743,13 @@ done
 set +f
 
 #check to see we actually found stuff to download
-if [ ${#ISCP_FILE_ARRAY[*]} -eq 0 ]; then 
-	echo "Error: Nothing to Download!" 1>&2;  
-	exit 1; 
+if [ ${#ISCP_FILE_ARRAY[*]} -eq 0 ]; then
+	echo "Error: Nothing to Download!" 1>&2;
+	exit 1;
 fi
 
 
-#show user menu 
+#show user menu
 user-menu
 
 # ISCP_USER_CHOICE now contains a list of the indicies to use in ISCP_FILE_ARRAY, cycle through them and take appropriate action
@@ -766,13 +767,12 @@ for (( i=0; i<= ${#ISCP_USER_CHOICE[*]} -1; i++)); do
 			#directory already exists on local system
 
 			#decide to use user input if --resume is set to 0
-			if [ $ISCP_RESUME -eq 1 ]; then 
-				resume-dir; 
+			if [ $ISCP_RESUME -eq 1 ]; then
+				resume-dir;
 			else
 				#bring up prompt to ask user what to do
 				drq-dir-prompt
 			fi
-
 		else
 			#directory in new do freshdir download
 			fresh-dir
@@ -786,22 +786,27 @@ for (( i=0; i<= ${#ISCP_USER_CHOICE[*]} -1; i++)); do
 			#file already exists on local system
 
 			#decide to use user input if --resume is set to 0
-			if [ $ISCP_RESUME -eq 1 ]; then 
-				resume-file; 
+			if [ $ISCP_RESUME -eq 1 ]; then
+				resume-file;
 			else
 				#bring up prompt to ask user what to do
 				drq-file-prompt
 			fi
-
 		else
 			#file is new do freshfile
 			fresh-file
 		fi
-
-
-
 	fi
 
+	## Run unrarall
+	if [ "$ISCP_UNRARALL" -eq 1 ]; then
+		echo "Running unrarall on ${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}..."
+		if type -P unrarall 2>&1 > /dev/null ; then
+			eval unrarall "${ISCP_UNRARALL_FLAGS}" -d  ${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]} ${ISCP_UNRARALL_BCK}
+		else
+			echo "Unrarall not found in $PATH, please download from http://github.com/arfoll/unrarall"
+		fi
+	fi
 done
 
 echo "Done..."
