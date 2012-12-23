@@ -27,7 +27,7 @@ There are 3 ways to set iscp's paramters
 3. Changing iscp's default variable values (I don't recommend doing this, you may accidently change a parameter you shouldn't change).
 
 
-iscp currently establishes a master SSH connection everytime it starts. This prevents repeated password requests if using password authentication, however it does leave a slight security hole because anyone who has read access to your master SSH connection socket has access to your remote machine! 
+iscp currently establishes a master SSH connection everytime it starts. This prevents repeated password requests if using password authentication, however it does leave a slight security hole because anyone who has read access to your master SSH connection socket has access to your remote machine!
 
 The default location of the socket is in the '/tmp/' directory. This can be changed by modifying the ISCP_SSH_CONTROL_PATH variable in iscp.
 
@@ -37,9 +37,9 @@ Once a SSH connection is established a ls and du command are executed on the rem
 
 [number] (size) filename
 
-or 
+or
 
-[number] (size) directory/ 
+[number] (size) directory/
 
 number - Is the number associated with that directory of file that you specify if you wish to download it to your local system.
 
