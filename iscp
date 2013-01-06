@@ -802,7 +802,7 @@ for (( i=0; i<= ${#ISCP_USER_CHOICE[*]} -1; i++)); do
 	if [ "$ISCP_UNRARALL" -eq 1 ]; then
 		echo "Running unrarall on ${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]}..."
 		if type -P unrarall 2>&1 > /dev/null ; then
-			eval unrarall "${ISCP_UNRARALL_FLAGS}" -d  ${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]} ${ISCP_UNRARALL_BCK}
+			eval unrarall "${ISCP_UNRARALL_FLAGS}" ${ISCP_TARGET_DIR}${ISCP_FILE_ARRAY[file_no]} ${ISCP_UNRARALL_BCK}
 		else
 			echo "Unrarall not found in $PATH, please download from http://github.com/arfoll/unrarall"
 		fi
