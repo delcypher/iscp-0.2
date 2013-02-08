@@ -31,7 +31,7 @@ declare -xi ISCP_CREATE_SSH_CONTROL_MASTER=1
 declare -x ISCP_SSH_CONTROL_PATH="/tmp/$$.iscp.%h-%p" #Specifies location of control socket file for ssh control master. Blank will cause no SSH control master to be used
 declare -x ISCP_SSH_MASTER_OPT="-o ServerAliveCountMax=5 -o ServerAliveInterval=20" #Options sent to ssh master if we create it
 declare -xi ISCP_UNRARALL=0 #Specifies if we run unrarall after every download
-declare -x ISCP_UNRARALL_FLAGS="--quiet --clean" #Specifies unrarall flags to use
+declare -x ISCP_UNRARALL_FLAGS="--quiet --clean=all" #Specifies unrarall flags to use
 declare -x ISCP_UNRARALL_BCK="&" #Will append string to end of unrarall command, use an ampersand to send unrarall in the background (default)
 
 #declare other variables
