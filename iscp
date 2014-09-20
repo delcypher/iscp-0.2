@@ -28,7 +28,7 @@ declare -x ISCP_VERSION="0.2q"
 declare -x ISCP_BW_LIMIT="" #SET THIS TO LIMIT in KB/s, set blank for no limit
 declare -xi ISCP_QUOTE=0
 declare -xi ISCP_CREATE_SSH_CONTROL_MASTER=1
-declare -x ISCP_SSH_CONTROL_PATH="/tmp/$$.iscp.%h-%p" #Specifies location of control socket file for ssh control master. Blank will cause no SSH control master to be used
+declare -x ISCP_SSH_CONTROL_PATH="/tmp/$$.iscp.%p" #Specifies location of control socket file for ssh control master. Blank will cause no SSH control master to be used
 declare -x ISCP_SSH_MASTER_OPT="-o ServerAliveCountMax=5 -o ServerAliveInterval=20" #Options sent to ssh master if we create it
 declare -xi ISCP_UNRARALL=0 #Specifies if we run unrarall after every download
 declare -x ISCP_UNRARALL_FLAGS="--quiet --clean=all" #Specifies unrarall flags to use
@@ -173,6 +173,7 @@ function socket-path-translate()
 		if [ -z $USERNAME ]; then
 			USERNAME=$(whoami);
 		fi
+		# FIXME: Using %h is broken because it may be an alias defined in ~/.ssh/config
 		echo "$input" | sed 's/%h/'${ISCP_SOURCE_SERVER#*@}'/' | sed 's/%p/'${ISCP_PORT}'/' | sed 's/%r/'$USERNAME'/'
 	done;
 }
