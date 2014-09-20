@@ -1,4 +1,5 @@
 #!/bin/bash
+# vim: set noexpandtab sw=4 ts=4 softtabstop=4:
 #iscp
 # Copyright (C) 2009-2012 Daniel Liew
 # Copyright (C) 2012 Brendan Le Foll
